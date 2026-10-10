@@ -241,13 +241,31 @@ PY
 
 note "实际启动一次 Chromium 验证系统依赖…"
 LAUNCH_OK=0
-for attempt in 1 2 3; do
+REPAIRED=0
+for attempt in 1 2 3 4; do
   if launch_test; then LAUNCH_OK=1; break; fi
 
-  # 从报错里把缺的 .so 找出来（可能不止一个）
-  MISSING_LIBS=$(grep -oE '[a-zA-Z0-9_.+-]+\.so\.[0-9]+' /tmp/chromium_launch.err | sort -u || true)
+  # 第 1 轮：先刷新动态链接器缓存再试。
+  #
+  # 实测踩到过：libXfixes 明明早就装好了（ls 显示 2025 年就有），
+  # dnf 也说 "already installed"，但 Chromium 报
+  #     libXfixes.so.3: cannot open shared object file
+  # 之后再启动就正常了 —— 原因是下载/安装刚结束时
+  # ld.so.cache 还没刷新，动态链接器一时找不到本来存在的库。
+  #
+  # 所以**不能一失败就断定"缺包"**，先 ldconfig 重试。
+  if [ "$REPAIRED" -eq 0 ]; then
+    warn "启动失败，先刷新动态链接器缓存再试（可能只是缓存没更新）"
+    sudo ldconfig 2>/dev/null || true
+    REPAIRED=1
+    continue
+  fi
+
+  # 之后几轮：从报错里把真正缺的 .so 找出来，查表补装
+  MISSING_LIBS=$(grep -oE '[a-zA-Z0-9_.+-]+\.so\.[0-9]+' /tmp/chromium_launch.err \
+                 | sort -u | grep -v "^lib$" || true)
   if [ -z "$MISSING_LIBS" ]; then
-    break   # 不是缺库的问题，别瞎猜，直接走失败路径
+    break   # 不是缺库的问题，别瞎猜
   fi
 
   PKGS_TO_TRY=()
@@ -257,14 +275,15 @@ for attempt in 1 2 3; do
       warn "缺 $so → 补装 $pkg"
       PKGS_TO_TRY+=("$pkg")
     else
-      warn "缺 $so，但我不知道它属于哪个包"
+      warn "缺 $so，我不知道它属于哪个包"
       note "查一下：dnf provides '*/$so'"
     fi
   done
   [ "${#PKGS_TO_TRY[@]}" -eq 0 ] && break
 
   sudo dnf install -y "${PKGS_TO_TRY[@]}" >/dev/null 2>&1 || true
-  note "补装完，重试启动（第 $attempt 次尝试）…"
+  sudo ldconfig 2>/dev/null || true
+  note "补装完，重试（第 $attempt 轮）…"
 done
 
 if [ "$LAUNCH_OK" -eq 1 ]; then
