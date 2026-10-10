@@ -448,6 +448,87 @@ def create_app() -> FastAPI:
         finally:
             ctx.close()
 
+    # ── 网页扫码登录 ────────────────────────────────────────
+
+    @app.post("/api/login/start")
+    async def api_login_start(
+        tier: str = Query("a", description="用哪个档位登录，默认 a（登录态）"),
+    ) -> JSONResponse:
+        from .login import LoginSession
+
+        result = await LoginSession.get().start(tier=tier)
+        return JSONResponse(result, status_code=200 if result.get("accepted") else 409)
+
+    @app.get("/api/login/status")
+    def api_login_status() -> JSONResponse:
+        from .login import LoginSession
+
+        return JSONResponse(LoginSession.get().state.to_dict())
+
+    @app.get("/api/login/qr")
+    def api_login_qr() -> Response:
+        """二维码图片。没截到就返回 404，让页面显示占位。"""
+        from fastapi.responses import Response as _Response
+
+        from .login import LoginSession
+
+        png = LoginSession.get().qr_bytes()
+        if not png:
+            return JSONResponse({"error": "还没有二维码"}, status_code=404)
+        return _Response(
+            content=png,
+            media_type="image/png",
+            headers={"Cache-Control": "no-store, max-age=0"},
+        )
+
+    @app.post("/api/login/refresh")
+    async def api_login_refresh() -> JSONResponse:
+        from .login import LoginSession
+
+        return JSONResponse(await LoginSession.get().refresh_qr())
+
+    @app.post("/api/login/cancel")
+    async def api_login_cancel() -> JSONResponse:
+        from .login import LoginSession
+
+        return JSONResponse(await LoginSession.get().cancel())
+
+    @app.get("/api/login/stream")
+    async def api_login_stream() -> StreamingResponse:
+        """SSE：登录状态变化。页面靠它把二维码、状态文字、成功提示串起来。"""
+        from .login import LoginSession
+
+        def sse(obj: dict) -> str:
+            return f"data: {json.dumps(obj, ensure_ascii=False, default=str)}\n\n"
+
+        async def gen() -> AsyncIterator[str]:
+            lc = LoginSession.get()
+            last = ""
+            idle = 0.0
+            while True:
+                cur = json.dumps(lc.state.to_dict(), ensure_ascii=False, sort_keys=True)
+                if cur != last:
+                    last = cur
+                    yield sse({"type": "state", **lc.state.to_dict()})
+                    idle = 0.0
+                else:
+                    idle += 1.0
+                    if idle >= 15:
+                        idle = 0.0
+                        yield ": keepalive\n\n"
+                # 会话结束后再多推两次就收尾，避免页面一直挂着
+                if not lc.busy and lc.state.status in ("ok", "error", "expired", "cancelled"):
+                    if not lc.state.active:
+                        yield sse({"type": "closed"})
+                        return
+                await asyncio.sleep(1.0)
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     @app.get("/api/storage")
     def api_storage() -> JSONResponse:
         """归档现状 + 清理预览。让用户看到"还能撑多久"。"""

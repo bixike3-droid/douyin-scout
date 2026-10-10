@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -84,6 +84,33 @@
   </nav>
 
   <section id="tab-collect" class="active">
+    <div class="card" id="loginBox" style="margin-bottom:16px">
+      <div class="row" style="align-items:center">
+        <b>登录状态</b>
+        <span id="loginText" class="dim">读取中…</span>
+        <span style="margin-left:auto"></span>
+        <button class="mini" id="loginStart">登录抖音</button>
+        <button class="mini" id="loginRefresh" style="display:none">刷新二维码</button>
+        <button class="mini" id="loginCancel" style="display:none">取消</button>
+      </div>
+      <div id="loginPanel" style="display:none;margin-top:12px">
+        <div style="display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap">
+          <div>
+            <img id="loginQr" alt="登录二维码"
+                 style="width:220px;height:220px;object-fit:contain;background:#fff;
+                        border-radius:10px;padding:6px">
+            <div class="s" style="margin-top:6px;text-align:center">用抖音 App 扫码</div>
+          </div>
+          <div style="flex:1;min-width:220px">
+            <div id="loginMsg" style="white-space:pre-wrap"></div>
+            <div class="s" id="loginHint" style="margin-top:10px;color:var(--dim);white-space:pre-wrap">
+              手机抖音 → 右上角「扫一扫」→ 对着二维码扫
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div class="row" style="margin-bottom:12px">
       <select id="colKind">
         <option value="">全部待办任务</option>
@@ -432,6 +459,103 @@ $('#cpRunAll').onclick = async ()=>{
   runCreator('plan');
 };
 
+// ── 网页扫码登录 ──────────────────────────────────────────
+let loginES = null;
+
+const LOGIN_STATE_TEXT = {
+  idle: '未登录', starting: '正在启动浏览器…', waiting: '等待扫码',
+  scanned: '已扫码，请在手机上确认', ok: '已登录', expired: '二维码超时',
+  error: '登录失败', cancelled: '已取消',
+};
+
+async function loadLogin(){
+  let s = {}, acct = {};
+  try { s = await get('/api/login/status'); } catch(e) { s = {status:'idle'}; }
+  try { acct = await get('/api/account'); } catch(e) {}
+  renderLogin(s, acct);
+}
+
+function renderLogin(s, acct){
+  acct = acct || {};
+  const busy = !!s.active;
+  const st = s.status || 'idle';
+
+  $('#loginRefresh').style.display = busy ? '' : 'none';
+  $('#loginCancel').style.display = busy ? '' : 'none';
+  $('#loginStart').style.display = busy ? 'none' : '';
+  $('#loginStart').textContent = $('#loginStart').textContent || '登录抖音';
+
+  if (busy) $('#loginPanel').style.display = '';
+
+  let text;
+  if (busy) {
+    text = LOGIN_STATE_TEXT[st] || st;
+  } else if (st === 'ok' || acct.self_nickname) {
+    text = `已登录：${s.nickname || acct.self_nickname || '（未知）'}`;
+    $('#loginStart').textContent = '重新登录';
+  } else {
+    text = '未登录 —— 采集前需要扫码登录一次';
+  }
+  $('#loginText').textContent = text;
+  $('#loginText').style.color = (st === 'ok' || acct.self_nickname) ? 'var(--ok)'
+                              : st === 'error' ? 'var(--bad)' : 'var(--warn)';
+
+  if (busy) {
+    if (s.qr_source) {
+      // 加时间戳破缓存，否则浏览器会一直显示旧二维码
+      $('#loginQr').src = '/api/login/qr?t=' + Date.now();
+      $('#loginHint').textContent = s.qr_source.indexOf('视口') >= 0
+        ? '（没定位到二维码元素，这是整屏截图 —— 二维码在图里，请自行辨认）'
+        : '手机抖音 → 右上角「扫一扫」→ 对着二维码扫';
+    }
+    $('#loginMsg').textContent = s.message || '正在准备…';
+  }
+
+  if (st === 'ok' && !busy) {
+    $('#loginPanel').style.display = 'none';
+    colLog(`登录成功：${s.nickname || ''}`, 'ok');
+    loadCollect();
+  }
+  if (st === 'error' && !busy) {
+    $('#loginMsg').textContent = s.error || s.message || '未知错误';
+  }
+}
+
+function connectLogin(){
+  if (loginES) { loginES.close(); loginES = null; }
+  loginES = new EventSource('/api/login/stream');
+  loginES.onmessage = ev=>{
+    let d; try { d = JSON.parse(ev.data); } catch(e) { return; }
+    if (d.type === 'closed') { loginES.close(); loginES = null; loadLogin(); return; }
+    renderLogin(d, null);
+  };
+  loginES.onerror = ()=>{ /* EventSource 自动重连 */ };
+}
+
+$('#loginStart').onclick = async ()=>{
+  $('#loginPanel').style.display = '';
+  $('#loginQr').removeAttribute('src');
+  $('#loginMsg').textContent = '正在启动浏览器，请稍候…';
+  try {
+    const r = await fetch('/api/login/start', {method:'POST'});
+    const d = await r.json();
+    if (!d.accepted) { alert(d.reason || '无法启动登录'); return; }
+    if (!loginES || loginES.readyState === 2) connectLogin();
+  } catch(e) { alert('启动失败：' + e.message); }
+};
+
+$('#loginRefresh').onclick = async ()=>{
+  const r = await fetch('/api/login/refresh', {method:'POST'});
+  const d = await r.json();
+  if (!d.ok) alert(d.reason || '刷新失败');
+};
+
+$('#loginCancel').onclick = async ()=>{
+  await fetch('/api/login/cancel', {method:'POST'});
+  $('#loginPanel').style.display = 'none';
+  loadLogin();
+};
+
 // ── 采集控制 ─────────────────────────────────────────────
 const KIND_LABEL = {
   fetch_self:       '识别本人账号',
@@ -452,6 +576,7 @@ function colLog(text, cls){
 }
 
 async function loadCollect(){
+  await loadLogin();
   let s = {};
   try { s = await get('/api/tasks/summary'); } catch(e) { s = {kinds:[], totals:{}}; }
   const kinds = s.kinds || [];
@@ -883,6 +1008,7 @@ function connect(){
   try{ renderCards(await get('/api/overview')); }catch(e){ $('#cards').innerHTML = `<div class="card bad">无法读取数据库：${e.message}。请先在终端运行 <code>scout init</code>。</div>`; }
   reload('collect');
   connectCollect();
+  connectLogin();
   connect();
   setInterval(()=>{ const active = document.querySelector('nav button.active'); if(active) reload(active.dataset.tab); }, 15000);
 })();
