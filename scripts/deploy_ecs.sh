@@ -1,151 +1,232 @@
 #!/usr/bin/env bash
 # deploy_ecs.sh —— 在阿里云 ECS（Alibaba Cloud Linux 4 / RHEL 9 系）上从零跑通
 #
-# 用法（在服务器上，代码已经解压到当前目录）：
+# 用法（在服务器上，代码已经 clone 到当前目录）：
 #     bash scripts/deploy_ecs.sh
 #
-# 它会做五件事：
-#   1. 装 Chromium 的系统依赖（dnf）
-#   2. 建 Python venv 并装依赖
-#   3. 下载 Playwright 的 Chromium
-#   4. 关掉 use_storage_state 之外可能踩的配置坑
-#   5. 跑自检
-#
-# **不会**做的事：不会碰你的登录态文件，不会跑采集。
-# 登录态要你自己从本地传上来（见文末说明）。
+# 设计原则：
+#   1. **不因为一个无关紧要的包就整个中断。** 字体装不上不影响采集。
+#   2. **用"真的启动一次 Chromium"来判断依赖够不够**，而不是猜包名。
+#      Playwright 官方支持列表里没有 Alibaba Cloud Linux，
+#      包名和标准 RHEL 有出入，靠猜会一直翻车。
+#   3. 出问题时给出能直接执行的排查命令，而不是只说"失败了"。
 
-set -euo pipefail
+set -uo pipefail    # 刻意不加 -e：每一步自己判断成败，不要中途静默退出
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$PROJECT_DIR"
 
 VENV_DIR="${SCOUT_VENV:-$HOME/scout-venv}"
 ACCOUNT="${SCOUT_ACCOUNT:-main}"
+FAILED=0
 
-say() { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
-warn() { printf '\033[1;33m[注意] %s\033[0m\n' "$*"; }
-die() { printf '\033[1;31m[失败] %s\033[0m\n' "$*" >&2; exit 1; }
+say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
+ok()   { printf '  \033[1;32m✓\033[0m %s\n' "$*"; }
+warn() { printf '  \033[1;33m!\033[0m %s\n' "$*"; }
+bad()  { printf '  \033[1;31m✗\033[0m %s\n' "$*"; FAILED=1; }
+note() { printf '    \033[2m%s\033[0m\n' "$*"; }
 
-# ── 0. 先确认环境符合预期 ────────────────────────────────────
+# ── 0. 环境预检 ──────────────────────────────────────────────
 say "0/5 环境预检"
+
 ARCH="$(uname -m)"
-[ "$ARCH" = "x86_64" ] || warn "架构是 $ARCH，不是 x86_64。Playwright 的 Chromium 在非 x86_64 上可能没有预编译包，请留意。"
+if [ "$ARCH" != "x86_64" ]; then
+  warn "架构是 $ARCH，不是 x86_64。Playwright 的 Chromium 在非 x86_64 上可能没有预编译包。"
+fi
+
 PY="$(command -v python3 || true)"
-[ -n "$PY" ] || die "找不到 python3"
+[ -n "$PY" ] || { bad "找不到 python3"; exit 1; }
 PYVER="$($PY -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-$PY -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)' \
-  || die "需要 Python 3.11+，当前是 $PYVER"
-echo "  架构 $ARCH ｜ Python $PYVER ｜ 项目目录 $PROJECT_DIR"
+if ! $PY -c 'import sys; sys.exit(0 if sys.version_info >= (3,11) else 1)'; then
+  bad "需要 Python 3.11+，当前 $PYVER"; exit 1
+fi
+ok "架构 $ARCH ｜ Python $PYVER ｜ 目录 $PROJECT_DIR"
 
 MEM_MB="$(free -m | awk '/^Mem:/{print $2}')"
-[ "$MEM_MB" -ge 1800 ] || warn "内存只有 ${MEM_MB}MB，跑 Chromium 会很紧，建议加 swap"
 SWAP_MB="$(free -m | awk '/^Swap:/{print $2}')"
-[ "$SWAP_MB" -ge 1024 ] || warn "swap 只有 ${SWAP_MB}MB。建议：sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile"
-echo "  内存 ${MEM_MB}MB ｜ swap ${SWAP_MB}MB"
+ok "内存 ${MEM_MB}MB ｜ swap ${SWAP_MB}MB"
+[ "$MEM_MB" -ge 1800 ] || warn "内存偏小，跑 Chromium 会很紧"
+if [ "$SWAP_MB" -lt 1024 ]; then
+  warn "swap 不足 1GB，建议加一个（Chromium 偶发内存尖峰会 OOM）："
+  note "sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile && sudo swapfile 见下"
+  note "sudo mkswap /swapfile && sudo swapon /swapfile"
+fi
 
-# ── 1. Chromium 的系统依赖 ──────────────────────────────────
-# 这一步最容易出问题：Playwright 官方支持列表里**没有** Alibaba Cloud Linux，
-# 它自带的 install-deps 可能不认这个发行版。所以这里手动装。
+# ── 1. 系统依赖 ──────────────────────────────────────────────
 say "1/5 装 Chromium 系统依赖（dnf）"
-if command -v dnf >/dev/null 2>&1; then
-  PKGS=(
-    nss nspr atk at-spi2-atk at-spi2-core cups-libs
-    libdrm libXcomposite libXdamage libXrandr libXScrnSaver
-    libgbm pango alsa-lib libxkbcommon libxkbcommon-x11
-    liberation-fonts
-  )
-  # 中文字体装不上不影响采集（我们是无头取数据，不渲染中文），所以不阻断
-  sudo dnf install -y "${PKGS[@]}" \
-    || die "dnf 装依赖失败。把上面的包名逐个试，找出哪个不存在。"
-  sudo dnf install -y wqy-zenhei-fonts 2>/dev/null \
-    || warn "中文字体没装上（不影响采集，只影响截图里的中文显示）"
-else
-  die "没有 dnf。这个脚本只覆盖 RHEL 系（Alibaba Cloud Linux / CentOS / Anolis）"
+
+if ! command -v dnf >/dev/null 2>&1; then
+  bad "没有 dnf。这个脚本只覆盖 RHEL 系（Alibaba Cloud Linux / CentOS / Anolis）"
+  exit 1
+fi
+
+# Chromium 运行时真正需要的动态库。
+# 这些一般各个发行版都有，只是包名可能不同。
+REQUIRED=(
+  nss nspr atk at-spi2-atk at-spi2-core cups-libs
+  libdrm libXcomposite libXdamage libXrandr
+  libgbm pango alsa-lib libxkbcommon
+)
+# 有更好、没有也不影响采集的。
+# **字体属于这一类** —— 我们无头取数据，不渲染中文，字体只影响截图好看不好看。
+OPTIONAL=(
+  libXScrnSaver libxkbcommon-x11
+  liberation-fonts dejavu-sans-fonts
+  wqy-zenhei-fonts google-noto-sans-cjk-fonts
+)
+
+# 先整体试一次（快，且 dnf 会给出一份"哪些找不到"的清单）。
+# 整体失败再逐个试，把装不上的挑出来单独报告 —— 而不是整个脚本挂掉。
+try_install() {
+  local label="$1"; shift
+  local -a pkgs=("$@")
+  [ "${#pkgs[@]}" -eq 0 ] && return 0
+
+  if sudo dnf install -y "${pkgs[@]}" >/tmp/dnf_scout.log 2>&1; then
+    ok "$label：${#pkgs[@]} 个包全部就绪"
+    return 0
+  fi
+
+  local good=0 bad_pkgs=()
+  for p in "${pkgs[@]}"; do
+    if sudo dnf install -y "$p" >/dev/null 2>&1; then
+      good=$((good + 1))
+    else
+      bad_pkgs+=("$p")
+    fi
+  done
+  ok "$label：装好 $good 个"
+  if [ "${#bad_pkgs[@]}" -gt 0 ]; then
+    warn "$label 里这个发行版没有的：${bad_pkgs[*]}"
+  fi
+  return "${#bad_pkgs[@]}"
+}
+
+try_install "必需库" "${REQUIRED[@]}"
+REQ_MISSING=$?
+try_install "可选库（字体等）" "${OPTIONAL[@]}" || true
+
+if [ "$REQ_MISSING" -gt 0 ]; then
+  warn "有 $REQ_MISSING 个必需库没装上 —— 继续往下走，"
+  warn "最后会用「真的启动一次 Chromium」来判定到底行不行。"
+  note "如果最后启动失败，把这条命令的输出发我："
+  note "ldd \$(ls -d ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome 2>/dev/null | head -1) | grep 'not found'"
 fi
 
 # ── 2. Python 环境 ──────────────────────────────────────────
 say "2/5 建虚拟环境并装 Python 依赖"
 if [ ! -d "$VENV_DIR" ]; then
-  python3 -m venv "$VENV_DIR"
+  python3 -m venv "$VENV_DIR" || { bad "建 venv 失败"; exit 1; }
+  ok "已建虚拟环境 $VENV_DIR"
+else
+  ok "复用已有虚拟环境 $VENV_DIR"
 fi
+
 # shellcheck disable=SC1091
-source "$VENV_DIR/bin/activate"
-python -m pip install --quiet --upgrade pip
-python -m pip install --quiet \
-  "playwright>=1.47" "typer>=0.12" "rich>=13.7" "PyYAML>=6.0" \
-  "fastapi>=0.115" "uvicorn>=0.30"
-echo "  已装：$(python -c 'import playwright; print("playwright", playwright.__version__ if hasattr(playwright,"__version__") else "")' 2>/dev/null || echo playwright)"
+source "$VENV_DIR/bin/activate" || { bad "激活 venv 失败"; exit 1; }
+python -m pip install --quiet --upgrade pip >/dev/null 2>&1 || warn "pip 升级失败（不致命）"
 
-# ── 3. 浏览器本体 ───────────────────────────────────────────
-say "3/5 下载 Chromium（约 150MB，首次会比较慢）"
-playwright install chromium || die "下载 Chromium 失败。检查网络，或设 PLAYWRIGHT_DOWNLOAD_HOST 走镜像。"
+if python -m pip install --quiet \
+      "playwright>=1.47" "typer>=0.12" "rich>=13.7" "PyYAML>=6.0" \
+      "fastapi>=0.115" "uvicorn>=0.30"; then
+  ok "Python 依赖装好了"
+else
+  bad "Python 依赖装失败。试试换源："
+  note "pip install -i https://mirrors.aliyun.com/pypi/simple/ playwright typer rich PyYAML fastapi uvicorn"
+  exit 1
+fi
 
-# ── 4. 配置：打开无头服务器开关 ──────────────────────────────
+# ── 3. 浏览器本体 + **真的启动一次** ─────────────────────────
+say "3/5 下载 Chromium 并验证能启动"
+note "（浏览器本体约 150MB，国内可能较慢。卡住可以先 Ctrl+C，"
+note "  然后设镜像重试：export PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright）"
+
+if ! playwright install chromium; then
+  bad "下载 Chromium 失败。试试国内镜像后重跑本脚本："
+  note "export PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright"
+  note "playwright install chromium"
+  exit 1
+fi
+ok "Chromium 已下载"
+
+# **这是唯一可靠的依赖验证方式。**
+# 不去猜包名装没装上，直接让它启动 —— 缺库会在这里报出来。
+note "实际启动一次 Chromium 验证系统依赖…"
+if python - <<'PY' 2>/tmp/chromium_launch.err
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    browser = p.chromium.launch()
+    page = browser.new_page()
+    page.goto("about:blank")
+    browser.close()
+print("launched")
+PY
+then
+  ok "Chromium 能正常启动 —— 系统依赖没问题"
+else
+  bad "Chromium 启动失败。错误原文："
+  sed 's/^/      /' /tmp/chromium_launch.err | tail -15
+  echo ""
+  warn "排查缺哪个库："
+  note "ldd \$(ls -d ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome 2>/dev/null | head -1) | grep 'not found'"
+  note "把上面输出里所有 'not found' 的库名发我，我告诉你装哪个包。"
+  exit 1
+fi
+
+# ── 4. 服务器侧配置 ──────────────────────────────────────────
 say "4/5 写入服务器侧配置（config/local.yaml）"
 
-# 检查当前配置里开关到底开没开。
-# 不能只看文件存不存在 —— 本地的 local.yaml 容易被一起打包带上来，
-# 那个文件里没有这两项，而"文件存在就跳过"会让服务器静默地用错配置。
-need_write=1
-if [ -f config/local.yaml ]; then
-  if grep -qE '^\s+use_storage_state:\s*true' config/local.yaml 2>/dev/null; then
-    echo "  ✓ config/local.yaml 里已有 use_storage_state: true"
-    need_write=0
-  else
-    warn "config/local.yaml 存在，但里面**没有** use_storage_state: true"
-    warn "这多半是从本地一起打包带过来的。现在追加服务器需要的那几行。"
+# 注意：不能只看文件存在就跳过 —— 本地的 local.yaml 容易被一起带上来，
+# 那个文件里没有这两项，跳过会导致服务器静默地用错配置。
+if [ -f config/local.yaml ] && grep -qE '^[[:space:]]+use_storage_state:[[:space:]]*true' config/local.yaml; then
+  ok "config/local.yaml 里已有 use_storage_state: true"
+else
+  if [ -f config/local.yaml ]; then
     cp config/local.yaml "config/local.yaml.bak.$(date +%Y%m%d%H%M%S)"
-    cat >> config/local.yaml <<'YAML'
+    warn "config/local.yaml 存在但没有 use_storage_state: true，已备份并追加"
+  fi
+  cat >> config/local.yaml <<'YAML'
 
 # ── 服务器侧（由 deploy_ecs.sh 追加）──
+# 服务器上没有屏幕没法扫码，用本地导出的登录态文件建立会话。
 tiers:
   a:
     use_storage_state: true
     headless: true
 YAML
-    warn "已追加，原文件备份为 config/local.yaml.bak.*"
-    warn "如果 local.yaml 里原本就有 tiers 段，这个追加会重复。请检查后合并。"
-    need_write=0
-  fi
-fi
-
-if [ "$need_write" = "1" ]; then
-  cat > config/local.yaml <<'YAML'
-# 服务器侧配置（不进版本库）
-#
-# use_storage_state: 服务器上没有屏幕没法扫码，
-# 用本地导出的登录态文件建立会话。
-tiers:
-  a:
-    use_storage_state: true
-    headless: true
-YAML
-  echo "  已写入 config/local.yaml"
+  ok "已写入 config/local.yaml"
+  note "如果这个文件里原本就有 tiers 段，现在会有重复，请检查后合并。"
 fi
 
 # ── 5. 自检 ─────────────────────────────────────────────────
 say "5/5 自检"
 STATE="$PROJECT_DIR/data/accounts/$ACCOUNT/state/tier_a_storage.json"
 if [ -f "$STATE" ]; then
-  echo "  ✓ 找到登录态文件：$STATE"
-  python -m scout.cli --account "$ACCOUNT" doctor || true
+  ok "找到登录态文件：$STATE"
+  python -m scout.cli --account "$ACCOUNT" account check || warn "账号核对未通过（登录态可能过期）"
 else
-  warn "还没有登录态文件：$STATE"
-  echo "  本地电脑上执行："
-  echo "      .\\.venv\\Scripts\\python.exe -m scout.cli --account $ACCOUNT login --tier a"
-  echo "  然后把 data/accounts/$ACCOUNT/state/tier_a_storage.json 传上来："
-  echo "      scp tier_a_storage.json admin@<服务器IP>:~/douyin-scout/data/accounts/$ACCOUNT/state/"
-  echo "  传完再跑一次本脚本，或直接："
-  echo "      python -m scout.cli --account $ACCOUNT account check"
+  warn "还没有登录态文件："
+  note "$STATE"
+  echo ""
+  note "本地电脑上执行（扫码登录并导出）："
+  note "  .\\.venv\\Scripts\\python.exe -m scout.cli --account $ACCOUNT login --tier a"
+  note "然后传上来："
+  note "  scp data/accounts/$ACCOUNT/state/tier_a_storage.json admin@<IP>:~/"
+  note "  mkdir -p $PROJECT_DIR/data/accounts/$ACCOUNT/state"
+  note "  mv ~/tier_a_storage.json $STATE"
 fi
 
+# ── 收尾 ────────────────────────────────────────────────────
 say "完成"
-cat <<'EOF'
-下一步：
-  1. 上传登录态（见上面提示）
-  2. 验证身份    python -m scout.cli --account main account check
-  3. 跑第一轮    python -m scout.cli --account main seed
-                 python -m scout.cli --account main run
+if [ "$FAILED" -ne 0 ]; then
+  warn "上面有步骤报错了，先处理它们再往下走。"
+fi
+cat <<EOF
 
-记得先激活环境：source ~/scout-venv/bin/activate
+下一步：
+  1. 激活环境      source $VENV_DIR/bin/activate
+  2. 上传登录态    （见上面提示）
+  3. 验证身份      python -m scout.cli --account $ACCOUNT account check
+  4. 跑第一轮      python -m scout.cli --account $ACCOUNT seed
+                   python -m scout.cli --account $ACCOUNT run
 EOF
