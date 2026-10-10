@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -818,9 +818,11 @@ async function loadHome(){
   }).join('') || '<div class="card dim">没有步骤</div>';
 }
 
+// 切到某个标签页。用字符串拼接而不是模板字面量 ——
+// 这段代码曾经用 PowerShell 正则插入过，反引号被当成转义符吃掉了，
+// 结果 `nav 变成换行、`${name}` 变成 ${name}，整个脚本解析失败、页面一片空白。
 function switchTab(name){
-  const btn = document.querySelector(
-av button[data-tab=${name}]);
+  const btn = document.querySelector('nav button[data-tab="' + name + '"]');
   if (btn) btn.click();
 }
 
