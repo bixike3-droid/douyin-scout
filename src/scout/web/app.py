@@ -350,6 +350,104 @@ def create_app() -> FastAPI:
 
     # ── AI 画像 ─────────────────────────────────────────────
 
+    # ── 采集控制 ────────────────────────────────────────────
+    #
+    # 原来是"网页只读、采集走 CLI"。对比赛作品来说，
+    # "必须去终端敲命令"是不合格的。这里让网页直接能干活。
+
+    @app.post("/api/collect/start")
+    async def api_collect_start(
+        kinds: str = Query("", description="只跑某类任务，逗号分隔，留空=全部"),
+        max_tasks: int = Query(0, ge=0, le=500, description="本轮最多几个任务，0=用配置值"),
+    ) -> JSONResponse:
+        from .runner import CollectionRunner
+
+        runner = CollectionRunner.get()
+        result = await runner.start(kinds=kinds, max_tasks=max_tasks)
+        return JSONResponse(result, status_code=200 if result.get("accepted") else 409)
+
+    @app.post("/api/collect/stop")
+    async def api_collect_stop() -> JSONResponse:
+        from .runner import CollectionRunner
+
+        return JSONResponse(await CollectionRunner.get().stop())
+
+    @app.get("/api/collect/status")
+    def api_collect_status() -> JSONResponse:
+        from .runner import CollectionRunner
+
+        runner = CollectionRunner.get()
+        return JSONResponse({
+            "busy": runner.busy,
+            "state": runner.state.to_dict(),
+            "events": len(runner._history),
+        })
+
+    @app.get("/api/collect/stream")
+    async def api_collect_stream() -> StreamingResponse:
+        """SSE：采集进度。
+
+        先回放已经发生的事件（用户可能在采集跑到一半时才打开页面），
+        再实时推送新的。
+        """
+        from .runner import CollectionRunner
+
+        runner = CollectionRunner.get()
+
+        def sse(obj: dict) -> str:
+            return f"data: {json.dumps(obj, ensure_ascii=False, default=str)}\n\n"
+
+        async def gen() -> AsyncIterator[str]:
+            queue, replay = runner.subscribe()
+            try:
+                yield sse({"type": "snapshot", "busy": runner.busy,
+                           "state": runner.state.to_dict()})
+                for ev in replay:
+                    yield sse(ev)
+                # 队列还没关，就保持连接；空闲时发心跳防止代理断链
+                while True:
+                    try:
+                        ev = await asyncio.wait_for(queue.get(), timeout=15.0)
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+                        continue
+                    yield sse(ev)
+            finally:
+                runner.unsubscribe(queue)
+
+        return StreamingResponse(
+            gen(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
+    @app.get("/api/tasks/summary")
+    def api_tasks_summary() -> JSONResponse:
+        """按类型统计待办 —— 界面上让用户知道"点下去会发生什么"。"""
+        from ..app import AppContext
+
+        ctx = AppContext.create(migrate_db=False)
+        try:
+            rows = ctx.db.rows_as_dicts(
+                "SELECT kind, state, COUNT(*) AS n FROM tasks GROUP BY kind, state"
+            )
+            by_kind: dict[str, dict[str, int]] = {}
+            for r in rows:
+                by_kind.setdefault(r["kind"], {})[r["state"]] = r["n"]
+            kinds = [
+                {"kind": k, "pending": v.get("pending", 0) + v.get("running", 0),
+                 "done": v.get("done", 0), "failed": v.get("failed", 0)}
+                for k, v in sorted(by_kind.items())
+            ]
+            for item in kinds:
+                item["ready"] = item["pending"]
+            return JSONResponse({
+                "kinds": kinds,
+                "totals": ctx.tasks.stats(),
+            })
+        finally:
+            ctx.close()
+
     @app.get("/api/account")
     def api_account() -> JSONResponse:
         """当前用的是哪个账号的数据目录 —— 页面上必须能一眼看到。

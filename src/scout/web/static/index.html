@@ -67,7 +67,8 @@
   <div class="grid" id="cards"></div>
 
   <nav>
-    <button data-tab="ai" class="active">AI 画像</button>
+    <button data-tab="collect" class="active">采集</button>
+    <button data-tab="ai">AI 画像</button>
     <button data-tab="likers">点赞人档案</button>
     <button data-tab="likerworks">点赞人作品</button>
     <button data-tab="coverage">名单完整性</button>
@@ -81,7 +82,30 @@
     <button data-tab="events">实时日志</button>
   </nav>
 
-  <section id="tab-ai" class="active">
+  <section id="tab-collect" class="active">
+    <div class="row" style="margin-bottom:12px">
+      <select id="colKind">
+        <option value="">全部待办任务</option>
+      </select>
+      上限 <input id="colMax" type="number" value="30" min="1" max="500"
+                  style="width:76px;background:var(--panel2);color:var(--fg);
+                         border:1px solid var(--line);border-radius:8px;padding:5px 8px">
+      <button class="mini" id="colStart">开始采集</button>
+      <button class="mini" id="colStop" style="display:none">停止</button>
+      <span class="dim" id="colStatus">读取中…</span>
+    </div>
+
+    <div id="colSummary" style="margin-bottom:14px"></div>
+
+    <div class="bar" style="margin-bottom:6px"><i id="colBarFill" style="width:0%"></i></div>
+    <div class="s" id="colProgress" style="margin-bottom:14px"></div>
+
+    <div class="k" style="margin-bottom:6px">实时输出</div>
+    <div id="colLog" style="background:#0b0d12;border:1px solid var(--line);border-radius:10px;
+         padding:12px;height:340px;overflow-y:auto;font:12px/1.7 ui-monospace,
+         Consolas,monospace;white-space:pre-wrap"></div>
+  </section>
+  <section id="tab-ai">
     <div class="row">
       <select id="aiScope">
         <option value="pending">只分析还没分析过的</option>
@@ -396,6 +420,149 @@ $('#cpRunAll').onclick = async ()=>{
   runCreator('plan');
 };
 
+// ── 采集控制 ─────────────────────────────────────────────
+const KIND_LABEL = {
+  fetch_self:       '识别本人账号',
+  fetch_likers:     '采点赞人名单',
+  fetch_user_works: '采点赞人作品',
+  fetch_notice:     '采互动消息',
+  fetch_profile:    '采用户主页',
+};
+let colES = null;
+
+function colLog(text, cls){
+  const el = $('#colLog');
+  const t = new Date().toLocaleTimeString('zh-CN', {hour12:false});
+  const color = cls === 'ok' ? 'var(--ok)' : cls === 'bad' ? 'var(--bad)'
+              : cls === 'warn' ? 'var(--warn)' : 'var(--fg)';
+  el.innerHTML += `<div style="color:${color}">${t}  ${esc(text)}</div>`;
+  el.scrollTop = el.scrollHeight;
+}
+
+async function loadCollect(){
+  let s = {};
+  try { s = await get('/api/tasks/summary'); } catch(e) { s = {kinds:[], totals:{}}; }
+  const kinds = s.kinds || [];
+
+  // 填下拉框：只有有待办的才列出来
+  const sel = $('#colKind');
+  const cur = sel.value;
+  sel.innerHTML = '<option value="">全部待办任务</option>';
+  kinds.filter(k=>k.pending>0).forEach(k=>{
+    const o = document.createElement('option');
+    o.value = k.kind;
+    o.textContent = `${KIND_LABEL[k.kind] || k.kind}（待办 ${k.pending}）`;
+    sel.appendChild(o);
+  });
+  sel.value = cur;
+
+  // 卡片：让用户知道"点下去会发生什么"
+  $('#colSummary').innerHTML = kinds.length ? kinds.map(k=>`
+    <div class="card" style="display:inline-block;min-width:170px;margin:0 10px 10px 0">
+      <div class="k">${KIND_LABEL[k.kind] || k.kind}</div>
+      <div class="v">${num(k.pending)}</div>
+      <div class="s">待办 ｜ 已完成 ${num(k.done)}${k.failed?` ｜ 失败 ${num(k.failed)}`:''}</div>
+    </div>`).join('') : '<div class="card dim">还没有任务。先点「开始采集」，系统会自动盘点。</div>';
+
+  try {
+    const st = await get('/api/collect/status');
+    renderCollectState(st);
+  } catch(e) {}
+}
+
+function renderCollectState(st){
+  const running = st.busy;
+  $('#colStart').style.display = running ? 'none' : '';
+  $('#colStop').style.display = running ? '' : 'none';
+  const s = st.state || {};
+  if (running) {
+    // 刚启动时 ready 还是 0（引擎正在盘点），这时候显示 0/0 会让人以为卡住了
+    if (!s.ready && !s.attempted) {
+      $('#colStatus').textContent = '正在盘点待办任务…';
+      $('#colBarFill').style.width = '5%';
+      $('#colProgress').textContent = '';
+    } else {
+      $('#colStatus').textContent =
+        `采集中… ${s.attempted||0}/${s.ready||0}（成功 ${s.ok||0} 失败 ${s.failed||0}）`;
+      const pct = s.ready ? Math.min(100, Math.round((s.attempted||0)/s.ready*100)) : 5;
+      $('#colBarFill').style.width = pct + '%';
+      $('#colProgress').textContent = `已跑 ${s.elapsed_s||0}s`;
+    }
+  } else if (s.run_id) {
+    $('#colStatus').textContent = `空闲（上一轮：成功 ${s.ok||0}，失败 ${s.failed||0}）`;
+    $('#colBarFill').style.width = '100%';
+    $('#colProgress').textContent = s.stop_reason || '';
+  } else {
+    $('#colStatus').textContent = '空闲';
+    $('#colBarFill').style.width = '0%';
+  }
+}
+
+function connectCollect(){
+  if (colES) { colES.close(); colES = null; }
+  colES = new EventSource('/api/collect/stream');
+  colES.onmessage = ev=>{
+    let d; try { d = JSON.parse(ev.data); } catch(e) { return; }
+    switch (d.type) {
+      case 'snapshot':
+        renderCollectState({busy: d.busy, state: d.state});
+        break;
+      case 'phase':
+        colLog(d.text || d.phase, 'warn'); break;
+      case 'seeded': {
+        const c = d.counts || {};
+        const parts = Object.entries(c).filter(([,v])=>v>0).map(([k,v])=>`${KIND_LABEL[k]||k} ${v}`);
+        colLog(parts.length ? '盘点完毕，新入队：' + parts.join('，') : '盘点完毕，没有新任务', 'warn');
+        break;
+      }
+      case 'start':
+        colLog(`开始采集，待办 ${d.ready} 个`, 'warn');
+        break;
+      case 'task': {
+        const ok = d.ok, empty = d.empty, blocked = d.blocked;
+        const tag = blocked ? '[被拦]' : ok ? '[成功]' : empty ? '[空]' : '[失败]';
+        const cls = blocked ? 'warn' : ok ? 'ok' : empty ? 'dim' : 'bad';
+        const name = KIND_LABEL[d.kind] || d.kind;
+        colLog(`${d.attempted}/${d.limit} ${tag} ${name} ${String(d.target).slice(0,26)} ` +
+               `${d.parsed || ''} ${d.duration_ms}ms${d.error ? '  ' + d.error : ''}`, cls);
+        break;
+      }
+      case 'done':
+        colLog(`本轮结束：尝试 ${d.attempted}，成功 ${d.ok}，空 ${d.empty}，失败 ${d.failed}` +
+               (d.stop_reason ? `　（${d.stop_reason}）` : ''), 'ok');
+        $('#colBarFill').style.width = '100%';
+        loadCollect(); loadAI();
+        break;
+      case 'error':
+        colLog('采集出错：' + d.error, 'bad'); break;
+      case 'stopped':
+        colLog('已手动停止', 'warn'); break;
+      case 'idle':
+        renderCollectState({busy: false, state: d.state});
+        break;
+    }
+  };
+  colES.onerror = ()=>{ /* EventSource 会自动重连，不关掉 */ };
+}
+
+$('#colStart').onclick = async ()=>{
+  const kinds = $('#colKind').value, max_tasks = $('#colMax').value;
+  $('#colLog').innerHTML = '';
+  try {
+    const r = await fetch(`/api/collect/start?kinds=${encodeURIComponent(kinds)}&max_tasks=${max_tasks}`,
+                          {method:'POST'});
+    const d = await r.json();
+    if (!d.accepted) { alert(d.reason || '无法启动'); return; }
+    colLog(`已启动，run_id=${d.run_id}`, 'warn');
+    if (!colES || colES.readyState === 2) connectCollect();
+  } catch(e) { alert('启动失败：' + e.message); }
+};
+
+$('#colStop').onclick = async ()=>{
+  if (!confirm('确定停止本轮采集？正在跑的任务会中断，下次会自动捞回。')) return;
+  await fetch('/api/collect/stop', {method:'POST'});
+};
+
 async function loadAI(){
   await loadCreator();
   // 账号标识必须一直可见 —— 看不到就会发生"以为在看 A 号数据，其实是 B 号的"
@@ -607,7 +774,7 @@ $('#uwSearch').oninput = ()=>{ clearTimeout(uwTimer); uwTimer = setTimeout(loadL
 let searchTimer = null;
 $('#likerSearch').oninput = ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(loadLikers, 300); };
 
-const LOADERS = {ai:loadAI, coverage:loadCoverage, likers:loadLikers, likerworks:loadLikerWorks,
+const LOADERS = {collect:loadCollect, ai:loadAI, coverage:loadCoverage, likers:loadLikers, likerworks:loadLikerWorks,
                  users:loadUsers, works:loadWorks, tasks:loadTasks,
                  requests:loadRequests, raw:loadRaw, config:loadConfig, report:loadReport};
 function reload(tab){
@@ -642,7 +809,8 @@ function connect(){
 
 (async function boot(){
   try{ renderCards(await get('/api/overview')); }catch(e){ $('#cards').innerHTML = `<div class="card bad">无法读取数据库：${e.message}。请先在终端运行 <code>scout init</code>。</div>`; }
-  reload('ai');
+  reload('collect');
+  connectCollect();
   connect();
   setInterval(()=>{ const active = document.querySelector('nav button.active'); if(active) reload(active.dataset.tab); }, 15000);
 })();

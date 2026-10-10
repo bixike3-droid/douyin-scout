@@ -1,4 +1,4 @@
-"""调度引擎：断点续采 + 配额 + 熔断 的执行者。
+﻿"""调度引擎：断点续采 + 配额 + 熔断 的执行者。
 
 一次 run_round 的行为：
 1. 先把崩溃遗留的 running 任务捞回来。
@@ -15,7 +15,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any, Callable, Iterable
 
 from ..app import AppContext
 from ..collect import collector_for
@@ -136,6 +136,7 @@ class Engine:
         tiers: Iterable[str] | None = None,
         kinds: Iterable[str] | None = None,
         dry_run: bool = False,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> RoundReport:
         ctx = self.ctx
         report = RoundReport()
@@ -158,7 +159,7 @@ class Engine:
                 report.stop_reason = f"达到本轮上限 {limit} 个任务"
                 break
             try:
-                await self._run_tier(tier, report, limit, wanted_kinds, dry_run)
+                await self._run_tier(tier, report, limit, wanted_kinds, dry_run, on_event)
             except (QuotaExceeded, CircuitOpen) as exc:
                 report.stop_reason = f"[{tier}] {exc}"
                 break
@@ -180,6 +181,7 @@ class Engine:
         limit: int,
         wanted_kinds: set[str] | None,
         dry_run: bool,
+        on_event: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         ctx = self.ctx
         tier_cfg = ctx.tier_cfg(tier)
@@ -226,6 +228,29 @@ class Engine:
             entry = outcome.to_dict()
             entry["task_id"] = task["id"]
             report.runs.append(entry)
+
+            # 进度回调：网页要实时看到"正在跑哪个、跑到第几个"。
+            # 放在这里而不是每个采集器里，是因为这是唯一知道
+            # "刚刚完成了什么"的地方，采集器本身不该关心谁来订阅。
+            if on_event is not None:
+                try:
+                    on_event({
+                        "type": "task",
+                        "tier": tier,
+                        "kind": task["kind"],
+                        "target": task["target"],
+                        "ok": outcome.ok,
+                        "empty": outcome.empty,
+                        "blocked": outcome.blocked,
+                        "captured": outcome.captured,
+                        "parsed": outcome.parsed.summary() if outcome.parsed else "",
+                        "duration_ms": outcome.duration_ms,
+                        "error": outcome.error,
+                        "attempted": report.attempted,
+                        "limit": limit,
+                    })
+                except Exception:
+                    pass   # 回调出错不能影响采集本身
 
             if outcome.blocked:
                 report.blocked += 1
