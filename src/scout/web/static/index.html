@@ -78,8 +78,7 @@
   <h1>douyin-scout</h1>
   <span class="tag"><span class="dot" id="dot"></span><span id="conn">连接中…</span></span>
   <span class="tag" id="clock"></span>
-  <span class="tag" id="acctTag">账号：读取中…</span>
-  <span class="tag" style="margin-left:auto">只读观测台 · 采集请走 CLI</span>
+  <span class="tag" style="margin-left:auto">采集与 AI 分析都在本页完成</span>
 </header>
 
 <main>
@@ -837,16 +836,6 @@ $('#sysRefresh').onclick = ()=>{ loadHome(); loadCollect(); };
 
 async function loadAI(){
   await loadCreator();
-  // 账号标识必须一直可见 —— 看不到就会发生"以为在看 A 号数据，其实是 B 号的"
-  try {
-    const acct = await get('/api/account');
-    const tag = document.getElementById('acctTag');
-    if (tag) {
-      tag.textContent = `账号：${acct.account}（${acct.self_nickname || '未采集身份'}）`;
-      tag.title = `数据目录 ${acct.data_dir}\n所有账号：${(acct.all_accounts||[]).join(', ')}`;
-      tag.style.color = (acct.all_accounts||[]).length > 1 ? 'var(--warn)' : 'var(--dim)';
-    }
-  } catch(e) {}
   const rows = await get('/api/analyses');
   const st = await get('/api/llm/status');
   $('#aiStatus').textContent = st.enabled
