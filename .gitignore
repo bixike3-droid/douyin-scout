@@ -1,0 +1,19 @@
+# 本地配置：不进版本库
+config/local.yaml
+
+# 运行期数据：原始归档、数据库、浏览器 profile、日志、导出
+data/
+logs/
+exports/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+build/
+dist/
+
+config/llm.local.yaml

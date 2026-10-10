@@ -1,0 +1,262 @@
+# douyin-scout 默认配置
+# 覆盖顺序：config/default.yaml  <  config/local.yaml  <  环境变量 SCOUT_*
+# 调参只改 local.yaml，不要改这个文件。
+
+app:
+  timezone: Asia/Shanghai
+  # 单轮采集最多处理多少个任务（防止一次跑飞）
+  max_tasks_per_run: 40
+
+tiers:
+  # ── 档 A：登录态（小号）───────────────────────────────
+  # 只负责它独占的数据：互动消息里的点赞人。
+  # 绝不浏览用户主页 —— 那件事交给档 B。
+  a:
+    enabled: true
+    mode: logged_in
+
+    # 0 = 不限制（默认）。配额记的是"动作数"：一次导航算 1 个，
+    # 展开一条通知再加 1 个。日常一天几个到几十个动作，
+    # 这个量级设上限只会挡住你自己的正常操作。
+    # 数据量大起来之后（几千个用户要逐个访问主页）再设，比如 300。
+    daily_request_quota: 0
+    min_delay_s: 3.0
+    max_delay_s: 9.0
+    page_stay_s: 1.5
+    headless: false                  # 保持可见，方便扫码和随时人工接管
+    scroll_rounds: 3
+
+    # ── 无头服务器开关 ──────────────────────────────────
+    # false（默认）= 用持久 profile 目录（本机开发，能扫码）
+    # true          = 用导出的登录态文件建立会话（云服务器）
+    #
+    # 云服务器上没有屏幕没法扫码，而且持久 profile 跨机器/跨浏览器搬不动
+    # （本机 Edge on Windows → 服务器 Chromium on Linux）。
+    # 打开这个开关后，流程是：
+    #   本地   scout login --tier a          （扫码，自动导出）
+    #   上传   data/accounts/<账号>/state/tier_a_storage.json
+    #   服务器 scout run ...                 （直接可用，不需要显示器）
+    #
+    # 文件不存在时会退回持久 profile，不会静默失败。
+    use_storage_state: false
+
+  # ── 档 B：匿名态 ─────────────────────────────────────
+  # 承担公开数据采集（用户主页、作品列表）。无账号可封。
+  b:
+    enabled: true
+    mode: anonymous
+    daily_request_quota: 0
+    min_delay_s: 1.2
+    max_delay_s: 4.5
+    page_stay_s: 1.0
+    headless: true
+    scroll_rounds: 6
+
+guard:
+  circuit:
+    # 连续多少次「空返回」判定为被静默降级 → 熔断
+    consecutive_empty_open: 5
+    # 连续多少次错误 → 熔断
+    consecutive_error_open: 8
+    # 熔断后冷却时长（分钟）
+    cooldown_minutes: 45
+  backoff:
+    # 任务失败后的重试退避
+    base_s: 60
+    factor: 2.0
+    max_s: 3600
+  throttle:
+    jitter_ratio: 0.35
+    # 每 N 个请求插一次长停顿，模拟人类离开
+    long_pause_every: 25
+    long_pause_min_s: 20
+    long_pause_max_s: 60
+
+browser:
+  # 用系统已安装的浏览器，而不是 Playwright 自带的 Chromium。
+  #   msedge  → Microsoft Edge（Windows 自带，推荐）
+  #   chrome  → Google Chrome
+  #   ""      → Playwright 自带的 Chromium
+  # 注意：这里只是换浏览器内核，不做任何指纹伪造。
+  channel: "msedge"
+  # 非空则连接一个你自己启动的真实浏览器（真实 profile、真实指纹，不做任何伪造）。
+  # 先手动启动：chrome.exe --remote-debugging-port=9222 --user-data-dir=<你的 profile>
+  # 然后在这里填 http://127.0.0.1:9222
+  cdp_url: ""
+  locale: zh-CN
+  timezone: Asia/Shanghai
+  viewport_width: 1440
+  viewport_height: 900
+  user_agent: ""                     # 留空使用浏览器默认，不要伪造
+  # 拦截资源以加速：不改请求特征，安全（只影响渲染）
+  block_resources: [image, media, font]
+  block_url_globs:
+    - "**/*.png"
+    - "**/*.jpg"
+    - "**/*.jpeg"
+    - "**/*.webp"
+    - "**/*.gif"
+    - "**/*.mp4"
+    - "**/*.woff"
+    - "**/*.woff2"
+    - "**/monitor_browser/**"
+    - "**/log/webcast/**"
+
+storage:
+  # 原始归档保留天数，0 = 永不删除（强烈建议保持 0）
+  raw_retention_days: 0
+  # 单个归档文件超过这个字节数就不落盘，只记元数据
+  raw_max_bytes: 8000000
+  # 是否连静态资源（JS/CSS/图片/埋点）的正文也读进来并归档。
+  # 默认 false —— 一次页面加载几百个静态文件，读了会明显卡顿，
+  # 存下来一天涨几个 GB，而且真正的接口会被淹没。
+  # 只有当你需要研究抖音的前端实现时才打开。
+  archive_static: false
+  # 是否把静态资源也写进请求日志。默认 false，同上。
+  log_static: false
+
+# 抖音页面地址。
+#
+# 入口不是 /notification，而是**你自己的个人主页**：
+# 页面右侧浮着「互动消息」面板，点开「等 N 人赞了你的作品」
+# 会弹出「赞过的人」覆盖层 —— 全程不跳转，都是同页覆盖层。
+#
+# 用 `scout probe --url "<主页地址>" --tier a --scroll 2 --dump` 实测校准。
+targets:
+  home_url: "https://www.douyin.com"
+  notice_url: "https://www.douyin.com/user/self?from_tab_name=main&showTab=post"
+  notice_url_candidates:
+    - "https://www.douyin.com/user/self?from_tab_name=main&showTab=post"
+    - "https://www.douyin.com/user/self"
+    - "https://www.douyin.com/notification"
+    - "https://www.douyin.com/message"
+
+  # 需要先点开「互动消息」面板才看得到列表。
+  # ⚠️ 实测：点「消息」打开的是**私信**页（出现 im/user/info 等接口），
+  #    而互动消息在「通知」下面。所以这里点「通知」。
+  notice_pre_actions: "notice_pre"
+  # 兜底：notice_pre 没打开面板时，按这个顺序逐个试点，点完立即验证面板是否可见。
+  notice_open_texts:
+    - "通知"
+    - "互动消息"
+    - "全部消息"
+    - "消息"
+  # ⚠️ 面板内部滚动：必须悬停到面板上滚轮才生效。
+  #    不填 → 永远滚不动 → 被误判触底 → 静默采到 0 条。探测出面板选择器后填这里。
+  notice_scroll_over: ""
+  notice_max_rounds: 40
+  notice_idle_rounds: 3
+  notice_end_texts:
+    - "暂时没有更多了"
+    - "没有更多了"
+    - "没有更多"
+    - "到底了"
+    - "已显示全部"
+    - "暂无更多"
+
+  # ── 形态 B（已确认）：通知按作品聚合，必须点开才看到完整点赞人 ──
+  # 实测：接口只给 7 个预览头像（merge_count=22），剩下的要点条目右侧
+  # 那个 **› 箭头按钮** 才展开。它是图标、没有文字，只能按几何位置找。
+  notice_click_actions: "notice_click"
+  notice_expand_actions: "notice_expand"
+  notice_close_actions: "notice_close"
+  # ⚠️ 这两项二选一，填了才会逐条展开。
+  #    优先用 regex 枚举：抖音的类名是混淆的，但文案稳定。
+  #    notice_item_pattern 默认值来自实测截图「JJ 等22人赞了你的作品」。
+  notice_item_selector: ""
+  notice_item_pattern: "等\\s*\\d+\\s*人赞了你的作品"
+  notice_max_items: 20
+
+  user_url_template: "https://www.douyin.com/user/{sec_uid}"
+
+# ── 声明式页面交互脚本 ───────────────────────────────────────
+# 为什么放在配置里：抖音的按钮文案和元素名会变，写死在代码里就要改代码。
+# 放这里，改版时改 YAML 就行。
+#
+# 支持的动作：
+#   click         selector, nth, timeout_ms
+#   click_text    text, exact, nth, timeout_ms
+#   click_pattern pattern, selector, nth, timeout_ms     ← 文案不确定/带数字时用
+#   click_all     text 或 selector, max, timeout_ms
+#   hover         selector
+#   scroll        rounds, min_px, max_px, over           ← over 必用于面板内滚动
+#   wait          seconds
+#   press         key
+#   goto          url
+#   back
+#   move          times
+#   screenshot    path, full_page
+#   dump_texts    keyword, max, max_len      ← 列出页面上的按钮文案，不用猜
+#   dump_html     selector, path, max_chars  ← 导出 DOM 片段，看结构
+#
+# 工作流：
+#   1) scout probe --tier a --url "<主页地址>" --scroll 2 --dump
+#   2) 按结果填 targets.notice_scroll_over 和 targets.notice_item_selector
+#   3) scout probe --tier a --url "<主页地址>" --scroll 2 --actions notice_expand
+#   4) scout run --kind fetch_notice
+#
+interactions:
+  # 打开「互动消息」面板。
+  #
+  # ⚠️⚠️ 这里必须是**悬停**，不能是点击。
+  # 实测：这个面板是活页 —— 鼠标悬停在入口上才存在，一移开就自动关闭。
+  # 点完鼠标就离开了，面板当场消失，后面什么接口都抓不到、DOM 里也看不到。
+  # （这个坑吃过很多轮：「点了没反应」的真正原因是点完面板就没了。）
+  #
+  # ⚠️ 悬停的是「通知」，不是「消息」—— 实测点「消息」打开的是私信页。
+  notice_pre:
+    - action: hover_text
+      text: "通知"
+      optional: true
+      timeout_ms: 5000
+    - action: wait
+      seconds: 2.0
+    - action: dump_texts
+      max: 200
+      max_len: 24
+      optional: true
+
+  # 点开一条聚合通知的完整名单。
+  #
+  # 实测（截图确认）：要点的是条目右侧那个 **› 箭头按钮**，不是条目本身。
+  # 它是图标、没有文字，click_text / click_pattern 全点不到 —— 会静默失败。
+  # click_anchor_button 按几何位置找：锚点文案所在的行里，最靠右的可点元素。
+  # 不依赖任何类名，抖音改样式也能用。
+  notice_click:
+    - action: click_anchor_button
+      anchor: "人赞了你的作品"
+      optional: true
+      candidates: 'button,[role="button"],svg,[class*="arrow"],[class*="Arrow"],[class*="next"],[class*="more"]'
+
+  # 名单打开之后：等渲染 → 滚到底 → **从 DOM 抽出完整点赞人**。
+  #
+  # ⚠️ extract_user_links 不能省：实测确认完整名单**不在任何接口响应里**，
+  # 是前端直接渲染的。翻遍归档都找不到那 27 个人，但 DOM 里有 ——
+  # 每个人都是一个 <a href="//www.douyin.com/user/MS4wLjAB...">，sec_uid 就在 href 里。
+  notice_expand:
+    - action: wait
+      seconds: 1.8
+    - action: scroll
+      rounds: 3
+    - action: extract_user_links
+      max: 300
+      optional: true
+
+  # 收尾：点「返回」回到互动消息列表，准备处理下一条
+  notice_close:
+    - action: click_text
+      text: "返回"
+      optional: true
+      timeout_ms: 4000
+    - action: press
+      key: Escape
+      optional: true
+    - action: wait
+      seconds: 1.0
+
+
+
+
+web:
+  host: 127.0.0.1
+  port: 8787

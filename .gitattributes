@@ -1,0 +1,36 @@
+# 统一行尾 —— 我们从 Windows 开发、往 Linux 部署，这个很重要。
+#
+# 如果不设，git 在 Windows 上可能把 shell 脚本存成 CRLF，
+# 传到 Linux 上执行会报 `\r: command not found` 这种莫名其妙的错。
+# 踩过一次就很难查，因为文件内容看起来完全正常。
+
+* text=auto eol=lf
+
+# shell 脚本必须 LF，否则 Linux 上跑不了
+*.sh    text eol=lf
+*.bash  text eol=lf
+
+# Windows 脚本保持 CRLF
+*.ps1   text eol=crlf
+*.cmd   text eol=crlf
+*.bat   text eol=crlf
+
+# 源码和配置统一 LF
+*.py    text eol=lf
+*.yaml  text eol=lf
+*.yml   text eol=lf
+*.md    text eol=lf
+*.sql   text eol=lf
+*.json  text eol=lf
+
+# 二进制文件不要动
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.zip   binary
+*.tar.gz binary
+*.sqlite3 binary
+*.db    binary

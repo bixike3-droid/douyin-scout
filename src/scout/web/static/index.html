@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>douyin-scout 观测台</title>
+<style>
+  :root{
+    --bg:#0f1116; --panel:#171a21; --panel2:#1d2129; --line:#2a2f3a;
+    --fg:#e6e9ef; --dim:#8b93a7; --accent:#4ea1ff; --ok:#3ddc97; --warn:#ffb454; --bad:#ff6b6b;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.6 -apple-system,"Segoe UI","Microsoft YaHei",sans-serif}
+  button.mini{background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+              border-radius:7px;padding:4px 10px;cursor:pointer;font-size:12px}
+  button.mini:hover{border-color:var(--accent);color:var(--accent)}
+  #likerGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:12px}
+  input::placeholder{color:var(--dim)}
+  .chip{display:inline-block;background:var(--panel2);border:1px solid var(--line);
+        border-radius:20px;padding:1px 9px;font-size:12px;margin-right:5px;color:var(--dim)}
+  header{position:sticky;top:0;z-index:10;background:var(--panel);border-bottom:1px solid var(--line);
+         padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  h1{font-size:16px;margin:0;font-weight:600}
+  .tag{font-size:12px;color:var(--dim)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--dim);display:inline-block;margin-right:6px}
+  .dot.on{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+  main{padding:18px 20px 60px;max-width:1500px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px;margin-bottom:18px}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card .k{font-size:12px;color:var(--dim);margin-bottom:6px}
+  .card .v{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+  .card .s{font-size:12px;color:var(--dim);margin-top:4px}
+  nav{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+  nav button{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;
+             padding:6px 14px;cursor:pointer;font-size:13px}
+  nav button.active{background:var(--accent);border-color:var(--accent);color:#04121f;font-weight:600}
+  section{display:none}
+  section.active{display:block}
+  table{width:100%;border-collapse:collapse;font-size:13px;background:var(--panel);border-radius:10px;overflow:hidden}
+  th,td{padding:8px 10px;text-align:left;border-bottom:1px solid var(--line);white-space:nowrap;
+        overflow:hidden;text-overflow:ellipsis;max-width:340px}
+  th{background:var(--panel2);color:var(--dim);font-weight:500;font-size:12px}
+  tr:hover td{background:#1b1f28}
+  .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)} .dim{color:var(--dim)}
+  pre{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px;
+      overflow:auto;max-height:70vh;font-size:12.5px}
+  .bar{height:6px;background:var(--panel2);border-radius:3px;overflow:hidden;margin-top:8px}
+  .bar i{display:block;height:100%;background:var(--accent)}
+  .bar i.hot{background:var(--bad)}
+  #log{background:#0b0d12;border:1px solid var(--line);border-radius:10px;padding:12px;height:260px;
+       overflow:auto;font:12px/1.7 ui-monospace,Consolas,monospace}
+  #log div{border-bottom:1px dashed #1c2028;padding:2px 0}
+  .row{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}
+  select{background:var(--panel2);color:var(--fg);border:1px solid var(--line);border-radius:8px;padding:5px 8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>douyin-scout</h1>
+  <span class="tag"><span class="dot" id="dot"></span><span id="conn">连接中…</span></span>
+  <span class="tag" id="clock"></span>
+  <span class="tag" id="acctTag">账号：读取中…</span>
+  <span class="tag" style="margin-left:auto">只读观测台 · 采集请走 CLI</span>
+</header>
+
+<main>
+  <div class="grid" id="cards"></div>
+
+  <nav>
+    <button data-tab="ai" class="active">AI 画像</button>
+    <button data-tab="likers">点赞人档案</button>
+    <button data-tab="likerworks">点赞人作品</button>
+    <button data-tab="coverage">名单完整性</button>
+    <button data-tab="users">用户</button>
+    <button data-tab="works">作品</button>
+    <button data-tab="tasks">任务</button>
+    <button data-tab="requests">请求日志</button>
+    <button data-tab="raw">原始归档</button>
+    <button data-tab="config">配置</button>
+    <button data-tab="report">画像报告</button>
+    <button data-tab="events">实时日志</button>
+  </nav>
+
+  <section id="tab-ai" class="active">
+    <div class="row">
+      <select id="aiScope">
+        <option value="pending">只分析还没分析过的</option>
+        <option value="all">全部重跑</option>
+      </select>
+      数量 <input id="aiLimit" type="number" value="30" min="1" max="200"
+                  style="width:76px;background:var(--panel2);color:var(--fg);
+                         border:1px solid var(--line);border-radius:8px;padding:5px 8px">
+      <button class="mini" id="aiRun">开始分析</button>
+      <button class="mini" id="aiPing">测试 API</button>
+      <span class="dim" id="aiStatus"></span>
+    </div>
+    <div class="bar" style="margin-bottom:16px"><i id="aiBarFill" style="width:0%"></i></div>
+
+    <div class="row" style="margin-bottom:16px">
+      <button class="mini" id="rvRun">⑥ 评价我的作品</button>
+      <button class="mini" id="plRun">⑦ 制定下一步计划</button>
+      <button class="mini" id="cpRunAll">两个一起跑</button>
+      <span class="dim" id="cpStatus"></span>
+    </div>
+    <div id="cpOut" style="margin-bottom:22px"></div>
+
+    <div class="dim" style="margin:6px 0 12px">↓ 下面是每个点赞人的画像</div>
+    <div id="aiGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:12px"></div>
+  </section>
+  <section id="tab-likers">
+    <div id="workCards" class="grid"></div>
+    <div class="row" style="margin-top:16px">
+      <select id="likerWork"><option value="">全部作品</option></select>
+      <input id="likerSearch" placeholder="搜索昵称或抖音号…"
+             style="background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+                    border-radius:8px;padding:6px 10px;min-width:220px">
+      <span class="dim" id="likerCount"></span>
+    </div>
+    <div id="likerGrid"></div>
+  </section>
+  <section id="tab-likerworks">
+    <div class="row">
+      <select id="uwAuthor"><option value="">全部点赞人</option></select>
+      <input id="uwSearch" placeholder="搜索作品标题…"
+             style="background:var(--panel2);color:var(--fg);border:1px solid var(--line);
+                    border-radius:8px;padding:6px 10px;min-width:220px">
+      <span class="dim" id="uwCount"></span>
+    </div>
+    <div id="uwList"></div>
+  </section>
+  <section id="tab-coverage">
+    <div id="covVerdict"></div>
+    <div id="coverage" style="margin-top:12px"></div>
+  </section>
+  <section id="tab-users">
+    <div class="row">
+      排序 <select id="userOrder"><option value="like_count">点赞次数</option><option value="fans">粉丝数</option><option value="recent">最近采集</option></select>
+      状态 <select id="userState"><option value="">全部</option><option value="ok">ok</option><option value="pending">pending</option><option value="blocked">blocked</option><option value="error">error</option></select>
+    </div>
+    <div id="users"></div>
+  </section>
+  <section id="tab-works"><div id="works"></div></section>
+  <section id="tab-tasks">
+    <div class="row">状态 <select id="taskState"><option value="">全部</option><option value="pending">pending</option><option value="running">running</option><option value="done">done</option><option value="failed">failed</option></select></div>
+    <div id="tasks"></div>
+  </section>
+  <section id="tab-requests">
+    <div class="row">只看异常 <input type="checkbox" id="onlyProblem"></div>
+    <div id="requests"></div>
+  </section>
+  <section id="tab-raw"><div id="raw"></div></section>
+  <section id="tab-config"><pre id="config">加载中…</pre></section>
+  <section id="tab-report"><pre id="report">加载中…</pre></section>
+  <section id="tab-events"><div id="log"></div></section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+
+function table(cols, rows, fmt){
+  if(!rows || !rows.length) return '<div class="card dim">暂无数据</div>';
+  const head = cols.map(c=>`<th>${c.label}</th>`).join('');
+  const body = rows.map(r=>'<tr>'+cols.map(c=>`<td>${fmt(c, r)}</td>`).join('')+'</tr>').join('');
+  return `<table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table>`;
+}
+const esc = v => (v===null||v===undefined||v==='') ? '<span class="dim">-</span>'
+  : String(v).replace(/[&<>]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
+const num = v => (v===null||v===undefined) ? '<span class="dim">-</span>' : Number(v).toLocaleString();
+
+async function get(path){ const r = await fetch(path); if(!r.ok) throw new Error(r.status); return r.json(); }
+
+function card(k, v, s){ return `<div class="card"><div class="k">${k}</div><div class="v">${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`; }
+
+function renderCards(o){
+  const u = o.users||{}, w = o.works||{}, l = o.like_edges||{}, q = o.quota||{}, rq = o.requests||{}, t = o.tasks||{};
+  let html = '';
+  html += card('点赞人', num(u.total), `待采 ${u.pending||0} · 已采 ${u.ok||0} · 缺口 ${u.wall||0}`);
+  html += card('点赞边', num(l.total), `今日新增 ${num(l.today)}`);
+  html += card('作品', num(w.total), `今日 ${w.today||0}`);
+  html += card('请求 24h', num(rq.total), `成功 ${((rq.ok_rate||0)*100).toFixed(1)}% · 空返回 ${rq.empty||0}`);
+  const tiers = Object.keys(q);
+  for(const tier of tiers){
+    const info = q[tier], pct = info.limit>0 ? Math.min(100, info.used/info.limit*100) : 0;
+    html += `<div class="card"><div class="k">配额 ${tier}</div><div class="v">${info.used}<span class="dim" style="font-size:14px"> / ${info.limit||'∞'}</span></div>
+      <div class="bar"><i class="${pct>85?'hot':''}" style="width:${pct}%"></i></div></div>`;
+  }
+  html += card('任务', num((t.pending||0)+(t.running||0)), `完成 ${t.done||0} · 失败 ${t.failed||0}`);
+  const nc = o.notice_coverage || {};
+  html += card('名单完整性',
+    nc.runs_reached_end ? '<span class="ok">已触底</span>' : '<span class="warn">未验证</span>',
+    `${nc.runs_total||0} 轮采集 · 不同点赞人 ${num(nc.distinct_likers)}`);
+  const circ = (o.circuit||[]);
+  const open = circ.filter(c=>c.state!=='closed');
+  html += card('熔断', open.length ? `<span class="bad">${open.length} 个开启</span>` : '<span class="ok">全部正常</span>',
+               open.map(c=>c.key).join(', '));
+  $('#cards').innerHTML = html;
+}
+
+async function loadLikerWorks(){
+  // 作者下拉：顺便显示每人采到了几个作品 —— 直接看出画像原料够不够
+  const sel = $('#uwAuthor');
+  if (sel.options.length <= 1) {
+    const sum = await get('/api/likers/summary');
+    sum.forEach(u=>{
+      const o = document.createElement('option');
+      o.value = u.sec_uid;
+      o.textContent = `${u.nickname || u.sec_uid.slice(0,12)}（${u.works_have} 个作品）`;
+      sel.appendChild(o);
+    });
+  }
+  const sec = sel.value, q = $('#uwSearch').value.trim();
+  const d = await get(`/api/user_works?sec_uid=${encodeURIComponent(sec)}&q=${encodeURIComponent(q)}&limit=500`);
+  $('#uwCount').textContent = `共 ${d.total} 条，显示 ${d.returned}`;
+  const rows = d.rows || [];
+  if (!rows.length) {
+    $('#uwList').innerHTML = '<div class="card dim">没有作品数据。先在终端跑：scout run --kind fetch_user_works</div>';
+    return;
+  }
+  $('#uwList').innerHTML = `<table><thead><tr>
+      <th>封面</th><th>作品标题</th><th>点赞</th><th>评论</th><th>发布</th><th>作者</th><th>数据时间</th>
+    </tr></thead><tbody>` + rows.map(r=>{
+    const cov = r.cover_url
+      ? `<img src="${r.cover_url}" referrerpolicy="no-referrer" loading="lazy"
+              style="width:56px;height:74px;object-fit:cover;border-radius:6px;background:var(--panel2)">`
+      : '';
+    const when = r.create_time ? new Date(r.create_time*1000).toLocaleDateString('zh-CN') : '—';
+    // 时效：不标出来就等于把可能过期的数字当当前事实展示
+    let age, ageTitle='';
+    if (r.stats_unknown_time) { age = '<span class="warn">时间未知</span>'; }
+    else if (r.stats_age_hours < 1) { age = '刚刚'; }
+    else if (r.stats_age_hours < 24) { age = Math.round(r.stats_age_hours)+' 小时前'; }
+    else {
+      const d = Math.round(r.stats_age_hours/24);
+      age = r.stats_stale ? `<span class="warn">${d} 天前（已过期）</span>` : `${d} 天前`;
+    }
+    // 合理性校验：反常数字标注出来，不篡改也不隐瞒
+    const flag = r.stats_anomaly
+      ? `<div class="warn" style="font-size:12px;margin-top:4px;white-space:normal">⚠ ${esc(r.stats_anomaly)}</div>`
+      : '';
+    return `<tr>
+      <td style="max-width:70px">${cov}</td>
+      <td style="white-space:normal;max-width:480px">${esc(r.description) || '<span class="dim">（无标题）</span>'}</td>
+      <td>${num(r.digg_count)}</td>
+      <td>${num(r.comment_count)}</td>
+      <td>${when}</td>
+      <td><a href="${r.author_url}" target="_blank" rel="noopener noreferrer">${esc(r.author_nickname) || '—'}</a></td>
+      <td style="white-space:nowrap">${age}</td>
+    </tr>${flag?`<tr><td colspan="7" style="border-top:none;padding-top:0">${flag}</td></tr>`:''}`;
+  }).join('') + '</tbody></table>';
+}
+
+async function loadCoverage(){
+  const d = await get('/api/coverage');
+  const c = d.coverage || {};
+  const cls = c.runs_reached_end ? 'ok' : (c.runs_total ? 'warn' : 'dim');
+  $('#covVerdict').innerHTML = `<div class="card"><div class="k">结论</div>
+    <div class="v" style="font-size:16px"><span class="${cls}">${esc(c.verdict)}</span></div>
+    <div class="s">不同点赞人 ${num(c.distinct_likers)} ｜ 点赞边 ${num(c.like_edges)} ｜ 采集 ${c.runs_total||0} 轮，其中触底 ${c.runs_reached_end||0} 轮</div></div>`;
+  $('#coverage').innerHTML = table([
+    {k:'started_at',label:'时间'},{k:'tier',label:'档'},{k:'rounds',label:'轮数'},
+    {k:'edges_seen',label:'看到'},{k:'new_edges',label:'新增'},{k:'distinct_likers',label:'不同人数'},
+    {k:'reached_end',label:'触底'},{k:'stop_reason',label:'停止原因'}
+  ], d.runs || [], (c2,r)=>{
+    if(c2.k==='reached_end') return r[c2.k] ? '<span class="ok">✓</span>' : '<span class="bad">✗</span>';
+    return esc(r[c2.k]);
+  });
+}
+// ── AI 画像 ──────────────────────────────────────────────
+const SCORE_COLOR = {5:'var(--ok)',4:'#7ee2b8',3:'var(--warn)',2:'#ff9a6b',1:'var(--bad)'};
+
+function aiCard(r){
+  let d = {};
+  try { d = JSON.parse(r.output_json || '{}'); } catch(e) {}
+  const score = Number(d.relevance_score) || 0;
+  const stars = '★'.repeat(score) + '☆'.repeat(Math.max(0, 5 - score));
+  const url = r.profile_url || '';
+  const av = r.avatar_url
+    ? `<img src="${r.avatar_url}" referrerpolicy="no-referrer" loading="lazy"
+            style="width:44px;height:44px;border-radius:50%;object-fit:cover;background:var(--panel2)">`
+    : `<div style="width:44px;height:44px;border-radius:50%;background:var(--panel2)"></div>`;
+  const domains = (d.content_domains || []).map(x=>`<span class="chip">${esc(x)}</span>`).join('');
+  return `<div class="card">
+    <div style="display:flex;gap:11px;align-items:center">
+      ${av}
+      <div style="min-width:0;flex:1">
+        <div style="font-weight:600"><a href="${url}" target="_blank" rel="noopener noreferrer"
+             style="color:var(--fg);text-decoration:none">${esc(r.nickname)||'（未知）'}</a></div>
+        <div class="s">抖音号 ${esc(r.douyin_id)||'—'} ｜ 粉丝 ${num(r.follower_count)}</div>
+      </div>
+      <div style="text-align:right">
+        <div style="color:${SCORE_COLOR[score]||'var(--dim)'};font-size:15px;letter-spacing:1px">${stars}</div>
+        <div class="k">相关性</div>
+      </div>
+    </div>
+    <div style="margin:10px 0 8px">${domains}</div>
+    ${d.persona ? `<div class="s" style="color:var(--fg)">${esc(d.persona)}</div>` : ''}
+    <div class="s" style="margin-top:6px">
+      <b>受众</b> ${esc(d.audience)||'—'}<br>
+      <b>活跃</b> ${esc(d.activity_level)||'—'}（${esc(d.activity_reason)||'—'}）<br>
+      <b>建议</b> <span style="color:var(--accent)">${esc(d.recommended_action)||'—'}</span>
+    </div>
+    ${d.summary ? `<div class="s" style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);white-space:normal">${esc(d.summary)}</div>` : ''}
+    <div class="k" style="margin-top:8px">${esc(r.prompt_version||'')} · ${esc(r.model||'')} · ${num((r.prompt_tokens||0)+(r.completion_tokens||0))} tokens</div>
+  </div>`;
+}
+
+// ── 创作者侧：作品评价 / 下一步计划 ──────────────────────
+const PRIO_COLOR = {'高':'var(--ok)','中':'var(--warn)','低':'var(--dim)'};
+
+function reviewCard(d, meta){
+  const score = Number(d.score)||0;
+  const li = (arr, color)=> (arr||[]).map(x=>
+    `<li style="margin:3px 0${color?';color:'+color:''}">${esc(x)}</li>`).join('');
+  return `<div class="card" style="border-color:var(--accent)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <b style="font-size:15px">我的作品评价</b>
+      <span style="color:${SCORE_COLOR[Math.round(score/2)]||'var(--dim)'};font-size:16px">
+        ${score}/10</span>
+      <span class="dim" style="margin-left:auto">${esc(meta?.created_at||'').slice(0,16)}</span>
+    </div>
+    <div style="white-space:normal;margin-bottom:10px">${esc(d.overall)}</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+      <div><div class="k" style="color:var(--ok)">优势</div><ul style="padding-left:18px;margin:4px 0">${li(d.strengths)}</ul></div>
+      <div><div class="k" style="color:var(--bad)">问题</div><ul style="padding-left:18px;margin:4px 0">${li(d.problems)}</ul></div>
+    </div>
+    ${d.audience_match?`<div class="s" style="margin-top:10px;white-space:normal"><b>受众匹配度</b> ${esc(d.audience_match)}</div>`:''}
+    <div class="k" style="margin-top:12px">改进建议</div>
+    <ul style="padding-left:18px;margin:4px 0;color:var(--accent)">${li(d.actions)}</ul>
+  </div>`;
+}
+
+function planCard(d, meta){
+  const topics = (d.topics||[]).map(t=>`
+    <div style="margin:7px 0;padding-left:10px;border-left:2px solid ${PRIO_COLOR[t.priority]||'var(--line)'}">
+      <b>${esc(t.title)}</b>
+      <span class="dim" style="font-size:12px">（${esc(t.priority||'')}）</span>
+      <div class="s" style="white-space:normal">${esc(t.why)}</div>
+    </div>`).join('');
+  const list = (arr,c)=>'<ul style="padding-left:18px;margin:4px 0'+(c?';color:'+c:'')+'">'
+    + (arr||[]).map(x=>`<li style="margin:3px 0">${esc(x)}</li>`).join('') + '</ul>';
+  return `<div class="card" style="border-color:var(--ok)">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+      <b style="font-size:15px">下一步计划</b>
+      <span class="dim" style="margin-left:auto">${esc(meta?.created_at||'').slice(0,16)}</span>
+    </div>
+    ${d.positioning?`<div style="white-space:normal;margin-bottom:8px"><b>定位</b> ${esc(d.positioning)}</div>`:''}
+    ${d.cadence?`<div class="s" style="margin-bottom:8px"><b>节奏</b> ${esc(d.cadence)}</div>`:''}
+    <div class="k">选题方向</div>${topics}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px">
+      <div><div class="k" style="color:var(--accent)">互动策略</div>${list(d.engagement)}</div>
+      <div><div class="k" style="color:var(--bad)">要避免</div>${list(d.avoid,'var(--dim)')}</div>
+    </div>
+    <div class="k" style="margin-top:12px;color:var(--ok)">未来 7 天</div>
+    ${list(d.next_7_days)}
+  </div>`;
+}
+
+async function loadCreator(){
+  let r = {};
+  try { r = await get('/api/creator'); } catch(e) { r = {}; }
+  let html = '';
+  if (r.review) {
+    try { html += reviewCard(JSON.parse(r.review.output_json||'{}'), r.review); } catch(e) {}
+  }
+  if (r.plan) {
+    try { html += planCard(JSON.parse(r.plan.output_json||'{}'), r.plan); } catch(e) {}
+  }
+  $('#cpOut').innerHTML = html
+    ? `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(460px,1fr));gap:12px">${html}</div>`
+    : '<div class="card dim">还没有作品评价。点上面的按钮生成。</div>';
+}
+
+function runCreator(task){
+  const label = task === 'plan' ? '制定下一步计划' : '评价我的作品';
+  $('#cpStatus').textContent = `${label}中…（约 10-20 秒）`;
+  const es = new EventSource(`/api/creator/stream?task=${task}&force=1`);
+  es.onerror = ()=>{ $('#cpStatus').textContent = '连接断开'; es.close(); };
+  es.onmessage = ev=>{
+    const d = JSON.parse(ev.data);
+    if (d.type === 'error') { $('#cpStatus').textContent = '错误：'+d.error; es.close(); return; }
+    if (d.type === 'result') {
+      $('#cpStatus').textContent = d.ok
+        ? `✓ ${label}完成（${d.tokens} tokens，${d.duration_ms}ms）`
+        : `✗ ${d.error}`;
+    }
+    if (d.type === 'done') { es.close(); loadCreator(); }
+  };
+}
+
+$('#rvRun').onclick = ()=>runCreator('review');
+$('#plRun').onclick = ()=>runCreator('plan');
+$('#cpRunAll').onclick = async ()=>{
+  runCreator('review');
+  // 计划依赖评价结论，必须等评价先落库
+  await new Promise(r=>setTimeout(r, 25000));
+  runCreator('plan');
+};
+
+async function loadAI(){
+  await loadCreator();
+  // 账号标识必须一直可见 —— 看不到就会发生"以为在看 A 号数据，其实是 B 号的"
+  try {
+    const acct = await get('/api/account');
+    const tag = document.getElementById('acctTag');
+    if (tag) {
+      tag.textContent = `账号：${acct.account}（${acct.self_nickname || '未采集身份'}）`;
+      tag.title = `数据目录 ${acct.data_dir}\n所有账号：${(acct.all_accounts||[]).join(', ')}`;
+      tag.style.color = (acct.all_accounts||[]).length > 1 ? 'var(--warn)' : 'var(--dim)';
+    }
+  } catch(e) {}
+  const rows = await get('/api/analyses');
+  const st = await get('/api/llm/status');
+  $('#aiStatus').textContent = st.enabled
+    ? `模型 ${st.model} ｜ 已分析 ${rows.length} 人 ｜ 累计 ${num(st.usage.prompt_tokens + st.usage.completion_tokens)} tokens`
+    : '未配置 API Key（config/llm.local.yaml）';
+  $('#aiGrid').innerHTML = rows.length ? rows.map(aiCard).join('')
+    : '<div class="card dim">还没有画像。点「开始分析」生成。</div>';
+}
+
+function runAI(){
+  const scope = $('#aiScope').value, limit = $('#aiLimit').value;
+  const fill = $('#aiBarFill');
+  fill.style.width = '0%';
+  $('#aiGrid').innerHTML = '';
+  const cards = [];
+  let total = 0, done = 0;
+  const es = new EventSource(`/api/analyze/stream?scope=${scope}&limit=${limit}&force=${scope==='all'?1:0}`);
+  $('#aiStatus').textContent = '连接中…';
+  es.onerror = ()=>{ $('#aiStatus').textContent = '连接断开'; es.close(); };
+  es.onmessage = ev=>{
+    const d = JSON.parse(ev.data);
+    if (d.type === 'error') { $('#aiStatus').textContent = '错误：' + d.error; es.close(); return; }
+    if (d.type === 'start') { total = d.total; $('#aiStatus').textContent = `开始分析 ${total} 人…`; }
+    if (d.type === 'start_item') {
+      $('#aiStatus').textContent = `分析中 ${d.index}/${d.total}…`;
+    }
+    if (d.type === 'item') {
+      done = d.index;
+      fill.style.width = total ? Math.round(done/total*100)+'%' : '0%';
+      if (d.ok && d.data) {
+        cards.push({nickname:'（生成中）', output_json: JSON.stringify(d.data),
+                    prompt_version:'v1', model:'', prompt_tokens:d.tokens, completion_tokens:0,
+                    profile_url:''});
+      }
+    }
+    if (d.type === 'done') {
+      es.close();
+      $('#aiStatus').textContent = d.total
+        ? `完成：成功 ${d.ok}，失败 ${d.failed}`
+        : (d.message || '没有需要分析的对象');
+      fill.style.width = '100%';
+      loadAI();
+    }
+  };
+}
+
+$('#aiRun').onclick = runAI;
+$('#aiPing').onclick = async ()=>{
+  $('#aiStatus').textContent = '测试中…';
+  const r = await get('/api/llm/status?ping=1');
+  const p = r.ping || {};
+  $('#aiStatus').textContent = p.ok
+    ? `✓ API 正常（${p.model}，${p.duration_ms}ms）`
+    : `✗ ${p.error || '未配置'}`;
+};
+
+async function loadLikers(){
+  await loadWorkCards();
+  const work = $('#likerWork').value, q = $('#likerSearch').value.trim();
+  const d = await get(`/api/likers/detail?work=${encodeURIComponent(work)}&q=${encodeURIComponent(q)}&limit=500`);
+  $('#likerCount').textContent = `共 ${d.total} 人，显示 ${d.returned}`;
+  const rows = d.rows || [];
+  $('#likerGrid').innerHTML = rows.length ? rows.map(likerCard).join('')
+    : '<div class="card dim">没有数据。先在终端跑：scout run --kind fetch_likers</div>';
+}
+
+function likerCard(r){
+  const avatar = r.avatar_url
+    ? `<img src="${r.avatar_url}" referrerpolicy="no-referrer" loading="lazy"
+            style="width:54px;height:54px;border-radius:50%;object-fit:cover;background:var(--panel2)">`
+    : `<div style="width:54px;height:54px;border-radius:50%;background:var(--panel2)"></div>`;
+  const fan = r.follower_count==null ? '—' : Number(r.follower_count).toLocaleString();
+  const fol = r.following_count==null ? '—' : Number(r.following_count).toLocaleString();
+  const works = r.aweme_count==null ? '—' : Number(r.aweme_count).toLocaleString();
+  const url = r.profile_url || '';
+  const ver = r.is_verified ? ' <span style="color:var(--accent)" title="认证">✓</span>' : '';
+  const sig = (r.signature||'').trim();
+  return `<div class="card" style="display:flex;gap:12px;align-items:flex-start">
+    <a href="${url}" target="_blank" rel="noopener noreferrer">${avatar}</a>
+    <div style="min-width:0;flex:1">
+      <div style="font-weight:600;font-size:14px">
+        <a href="${url}" target="_blank" rel="noopener noreferrer"
+           style="color:var(--fg);text-decoration:none">${esc(r.nickname) || '（无昵称）'}</a>${ver}
+      </div>
+      <div class="k" style="margin:3px 0 6px">抖音号：${esc(r.douyin_id) || '—'}</div>
+      <div class="s">粉丝 ${fan} ｜ 关注 ${fol} ｜ 作品 ${works}</div>
+      ${sig ? `<div class="s" style="margin-top:5px;white-space:normal;color:var(--dim)">${esc(sig.slice(0,60))}</div>` : ''}
+      <div class="s" style="margin-top:7px">
+        <a href="${url}" target="_blank" rel="noopener noreferrer">打开抖音主页 ↗</a>
+      </div>
+    </div>
+  </div>`;
+}
+
+async function loadWorkCards(){
+  let rows = [];
+  try { rows = await get('/api/works/overview'); } catch(e) { rows = []; }
+  $('#workCards').innerHTML = rows.length ? rows.map(w=>{
+    const ok = w.complete;
+    const status = ok ? '<span class="ok">✓ 已拿全</span>'
+                      : `<span class="warn">还差 ${num(w.gap)} 人</span>`;
+    const src = w.from_api ? '接口完整名单' : '只有通知流预览';
+    return `<div class="card">
+      <div class="k">${esc((w.description||'').slice(0,26)) || w.aweme_id}</div>
+      <div class="v">${num(w.likers_have)}<span class="dim" style="font-size:14px"> / ${num(w.digg_count)} 赞</span></div>
+      <div class="s">${status} · ${src}</div>
+      <div style="margin-top:9px">
+        <button class="mini" onclick="queueLikers('${w.aweme_id}')">采集这个作品的点赞人</button>
+      </div>
+    </div>`;
+  }).join('') : '<div class="card dim">还没有作品数据</div>';
+
+  const sel = $('#likerWork');
+  if (sel.options.length <= 1) {
+    rows.forEach(w=>{
+      const o = document.createElement('option');
+      o.value = w.aweme_id;
+      o.textContent = ((w.description||w.aweme_id).slice(0,24)) + `（${w.likers_have} 人）`;
+      sel.appendChild(o);
+    });
+  }
+}
+
+async function queueLikers(id){
+  try {
+    const r = await fetch(`/api/works/${id}/fetch_likers`, {method:'POST'});
+    const d = await r.json();
+    alert(d.queued
+      ? '已排进队列。\n\n回到终端执行：\n  .\\.venv\\Scripts\\python.exe -m scout.cli run --kind fetch_likers'
+      : '该任务已在队列里。回到终端执行：\n  .\\.venv\\Scripts\\python.exe -m scout.cli run --kind fetch_likers');
+  } catch(e) { alert('提交失败：'+e.message); }
+}
+
+async function loadUsers(){
+  const rows = await get(`/api/users?limit=100&order=${$('#userOrder').value}&state=${$('#userState').value}`);
+  $('#users').innerHTML = table([
+    {k:'nickname',label:'昵称'},{k:'douyin_id',label:'抖音号'},{k:'follower_count',label:'粉丝'},
+    {k:'following_count',label:'关注'},{k:'region',label:'地区'},{k:'like_count',label:'点赞次数'},
+    {k:'profile_state',label:'状态'},{k:'last_seen_at',label:'最近采集'},{k:'sec_uid',label:'sec_uid'}
+  ], rows, (c,r)=> ['follower_count','following_count','like_count'].includes(c.k)?num(r[c.k]):esc(r[c.k]));
+}
+async function loadWorks(){
+  const rows = await get('/api/works?limit=100');
+  $('#works').innerHTML = table([
+    {k:'description',label:'文案'},{k:'digg_count',label:'点赞'},{k:'comment_count',label:'评论'},
+    {k:'share_count',label:'分享'},{k:'create_time',label:'发布时间戳'},{k:'aweme_id',label:'aweme_id'}
+  ], rows, (c,r)=>{
+    if(['digg_count','comment_count','share_count'].includes(c.k)) return num(r[c.k]);
+    if(c.k==='create_time' && r[c.k]) return new Date(r[c.k]*1000).toLocaleString('zh-CN');
+    return esc(r[c.k]);
+  });
+}
+async function loadTasks(){
+  const rows = await get(`/api/tasks?limit=100&state=${$('#taskState').value}`);
+  $('#tasks').innerHTML = table([
+    {k:'id',label:'id'},{k:'kind',label:'类型'},{k:'target',label:'目标'},{k:'tier',label:'档'},
+    {k:'state',label:'状态'},{k:'attempts',label:'尝试'},{k:'available_at',label:'可用时间'},{k:'last_error',label:'最后错误'}
+  ], rows, (c,r)=> c.k==='state' ? `<span class="${r[c.k]==='failed'?'bad':r[c.k]==='done'?'ok':'warn'}">${r[c.k]}</span>` : esc(r[c.k]));
+}
+async function loadRequests(){
+  const p = $('#onlyProblem').checked ? '&only_problem=true' : '';
+  const rows = await get('/api/requests?limit=120'+p);
+  $('#requests').innerHTML = table([
+    {k:'ts',label:'时间'},{k:'tier',label:'档'},{k:'status',label:'状态'},{k:'byte_size',label:'字节'},
+    {k:'duration_ms',label:'耗时ms'},{k:'empty_result',label:'空返回'},{k:'error',label:'错误'},{k:'url',label:'URL'}
+  ], rows, (c,r)=>{
+    if(c.k==='empty_result') return r[c.k] ? '<span class="warn">是</span>' : '';
+    if(c.k==='status') return `<span class="${r[c.k]>=200&&r[c.k]<400?'ok':'bad'}">${esc(r[c.k])}</span>`;
+    return esc(r[c.k]);
+  });
+}
+async function loadRaw(){
+  const rows = await get('/api/raw?limit=60');
+  $('#raw').innerHTML = table([
+    {k:'id',label:'id'},{k:'collected_at',label:'采集时间'},{k:'source',label:'来源'},{k:'tier',label:'档'},
+    {k:'content_type',label:'类型'},{k:'byte_size',label:'字节'},{k:'url',label:'URL'}
+  ], rows, (c,r)=> c.k==='byte_size'?num(r[c.k]):esc(r[c.k]));
+}
+async function loadConfig(){ try{ $('#config').textContent = JSON.stringify(await get('/api/config'), null, 2);}catch(e){ $('#config').textContent = '加载失败：'+e.message; } }
+async function loadReport(){ try{ $('#report').textContent = (await get('/api/report')).markdown; }catch(e){ $('#report').textContent = '加载失败：'+e.message; } }
+
+document.querySelectorAll('nav button').forEach(btn=>{
+  btn.onclick = ()=>{
+    document.querySelectorAll('nav button').forEach(b=>b.classList.remove('active'));
+    document.querySelectorAll('section').forEach(s=>s.classList.remove('active'));
+    btn.classList.add('active');
+    $('#tab-'+btn.dataset.tab).classList.add('active');
+    reload(btn.dataset.tab);
+  };
+});
+$('#userOrder').onchange = loadUsers; $('#userState').onchange = loadUsers;
+$('#taskState').onchange = loadTasks; $('#onlyProblem').onchange = loadRequests;
+$('#likerWork').onchange = loadLikers;
+$('#uwAuthor').onchange = loadLikerWorks;
+let uwTimer = null;
+$('#uwSearch').oninput = ()=>{ clearTimeout(uwTimer); uwTimer = setTimeout(loadLikerWorks, 300); };
+let searchTimer = null;
+$('#likerSearch').oninput = ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(loadLikers, 300); };
+
+const LOADERS = {ai:loadAI, coverage:loadCoverage, likers:loadLikers, likerworks:loadLikerWorks,
+                 users:loadUsers, works:loadWorks, tasks:loadTasks,
+                 requests:loadRequests, raw:loadRaw, config:loadConfig, report:loadReport};
+function reload(tab){
+  if(tab==='events' || !LOADERS[tab]) return;
+  LOADERS[tab]().catch(e=>{ document.getElementById(tab).innerHTML = `<div class="card bad">加载失败：${e.message}</div>`; });
+}
+
+// ── SSE 实时流 ────────────────────────────────────────────
+function pushLog(line, cls){
+  const box = $('#log');
+  const div = document.createElement('div');
+  const t = new Date().toLocaleTimeString('zh-CN');
+  div.innerHTML = `<span class="dim">${t}</span> <span class="${cls||''}">${line}</span>`;
+  box.prepend(div);
+  while(box.childElementCount > 300) box.removeChild(box.lastChild);
+}
+function connect(){
+  const es = new EventSource('/api/stream');
+  es.onopen = ()=>{ $('#dot').classList.add('on'); $('#conn').textContent = '已连接'; };
+  es.onerror = ()=>{ $('#dot').classList.remove('on'); $('#conn').textContent = '断线重连中…'; };
+  es.onmessage = ev=>{
+    const data = JSON.parse(ev.data);
+    if(data.error){ pushLog('采集端错误：'+data.error, 'bad'); return; }
+    if(data.overview) renderCards(data.overview);
+    (data.events||[]).forEach(e=>{
+      const cls = e.level==='error' ? 'bad' : e.level==='warn' ? 'warn' : '';
+      pushLog(`[${e.level}] ${e.scope} ${e.message}`, cls);
+    });
+    $('#clock').textContent = '更新于 ' + new Date(data.ts).toLocaleTimeString('zh-CN');
+  };
+}
+
+(async function boot(){
+  try{ renderCards(await get('/api/overview')); }catch(e){ $('#cards').innerHTML = `<div class="card bad">无法读取数据库：${e.message}。请先在终端运行 <code>scout init</code>。</div>`; }
+  reload('ai');
+  connect();
+  setInterval(()=>{ const active = document.querySelector('nav button.active'); if(active) reload(active.dataset.tab); }, 15000);
+})();
+</script>
+</body>
+</html>
