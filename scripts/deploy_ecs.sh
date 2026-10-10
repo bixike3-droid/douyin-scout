@@ -80,11 +80,17 @@ if ! command -v dnf >/dev/null 2>&1; then
 fi
 
 # Chromium 运行时真正需要的动态库。
-# 这些一般各个发行版都有，只是包名可能不同。
+#
+# 这份列表是**被真实报错补全的**，不是抄来的：
+# 第一版漏了 libXfixes，Chromium 启动时报
+#     error while loading shared libraries: libXfixes.so.3
+# 才知道少了它。所以下面还配了一张「缺库 → 装哪个包」的对照表，
+# 让脚本能自己修（见 fix_missing_libs）。
 REQUIRED=(
   nss nspr atk at-spi2-atk at-spi2-core cups-libs
-  libdrm libXcomposite libXdamage libXrandr
-  libgbm pango alsa-lib libxkbcommon
+  libdrm libXcomposite libXdamage libXrandr libXfixes
+  libX11-xcb libxcb libxshmfence
+  libgbm pango cairo alsa-lib libxkbcommon
 )
 # 有更好、没有也不影响采集的。
 # **字体属于这一类** —— 我们无头取数据，不渲染中文，字体只影响截图好看不好看。
@@ -192,9 +198,37 @@ fi
 ok "Chromium 已下载"
 
 # **这是唯一可靠的依赖验证方式。**
-# 不去猜包名装没装上，直接让它启动 —— 缺库会在这里报出来。
-note "实际启动一次 Chromium 验证系统依赖…"
-if python - <<'PY' 2>/tmp/chromium_launch.err
+# 不去猜包名装没装上，直接让它启动 —— 缺库会在这里报出来，
+# 而且报错里会明说缺哪个 .so 文件。
+#
+# 缺库时不再只是"失败退出"，而是查对照表自动补装再重试。
+# 这份对照表是踩出来的：第一版漏装 libXfixes，Chromium 直接起不来。
+
+declare -A LIB_TO_PKG=(
+  ["libXfixes.so.3"]="libXfixes"
+  ["libXcomposite.so.1"]="libXcomposite"
+  ["libXdamage.so.1"]="libXdamage"
+  ["libXrandr.so.2"]="libXrandr"
+  ["libX11-xcb.so.1"]="libX11-xcb"
+  ["libxshmfence.so.1"]="libxshmfence"
+  ["libgbm.so.1"]="libgbm"
+  ["libcups.so.2"]="cups-libs"
+  ["libcairo.so.2"]="cairo"
+  ["libpango-1.0.so.0"]="pango"
+  ["libpangocairo-1.0.so.0"]="pango"
+  ["libatk-1.0.so.0"]="atk"
+  ["libatk-bridge-2.0.so.0"]="at-spi2-atk"
+  ["libatspi.so.0"]="at-spi2-core"
+  ["libnss3.so"]="nss"
+  ["libnspr4.so"]="nspr"
+  ["libxkbcommon.so.0"]="libxkbcommon"
+  ["libasound.so.2"]="alsa-lib"
+  ["libdrm.so.2"]="libdrm"
+  ["libXss.so.1"]="libXScrnSaver"
+)
+
+launch_test() {
+  python - <<'PY' 2>/tmp/chromium_launch.err
 from playwright.sync_api import sync_playwright
 with sync_playwright() as p:
     browser = p.chromium.launch()
@@ -203,15 +237,47 @@ with sync_playwright() as p:
     browser.close()
 print("launched")
 PY
-then
+}
+
+note "实际启动一次 Chromium 验证系统依赖…"
+LAUNCH_OK=0
+for attempt in 1 2 3; do
+  if launch_test; then LAUNCH_OK=1; break; fi
+
+  # 从报错里把缺的 .so 找出来（可能不止一个）
+  MISSING_LIBS=$(grep -oE '[a-zA-Z0-9_.+-]+\.so\.[0-9]+' /tmp/chromium_launch.err | sort -u || true)
+  if [ -z "$MISSING_LIBS" ]; then
+    break   # 不是缺库的问题，别瞎猜，直接走失败路径
+  fi
+
+  PKGS_TO_TRY=()
+  for so in $MISSING_LIBS; do
+    pkg="${LIB_TO_PKG[$so]:-}"
+    if [ -n "$pkg" ]; then
+      warn "缺 $so → 补装 $pkg"
+      PKGS_TO_TRY+=("$pkg")
+    else
+      warn "缺 $so，但我不知道它属于哪个包"
+      note "查一下：dnf provides '*/$so'"
+    fi
+  done
+  [ "${#PKGS_TO_TRY[@]}" -eq 0 ] && break
+
+  sudo dnf install -y "${PKGS_TO_TRY[@]}" >/dev/null 2>&1 || true
+  note "补装完，重试启动（第 $attempt 次尝试）…"
+done
+
+if [ "$LAUNCH_OK" -eq 1 ]; then
   ok "Chromium 能正常启动 —— 系统依赖没问题"
 else
   bad "Chromium 启动失败。错误原文："
   sed 's/^/      /' /tmp/chromium_launch.err | tail -15
   echo ""
   warn "排查缺哪个库："
-  note "ldd \$(ls -d ~/.cache/ms-playwright/chromium-*/chrome-linux/chrome 2>/dev/null | head -1) | grep 'not found'"
-  note "把上面输出里所有 'not found' 的库名发我，我告诉你装哪个包。"
+  CHROME_BIN="$(ls -d ~/.cache/ms-playwright/chromium_headless_shell-*/chrome-headless-shell-linux64/chrome-headless-shell 2>/dev/null | head -1)"
+  [ -z "$CHROME_BIN" ] && CHROME_BIN="$(ls -d ~/.cache/ms-playwright/chromium-*/chrome-linux64/chrome 2>/dev/null | head -1)"
+  note "ldd \"$CHROME_BIN\" | grep 'not found'"
+  note "把输出里所有库名发我，我告诉你装哪个包。"
   exit 1
 fi
 
