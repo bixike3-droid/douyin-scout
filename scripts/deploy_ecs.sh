@@ -20,12 +20,21 @@ VENV_DIR="${SCOUT_VENV:-$HOME/scout-venv}"
 ACCOUNT="${SCOUT_ACCOUNT:-main}"
 
 # ── 国内镜像 ────────────────────────────────────────────────
-# 在阿里云 ECS 上直连 pypi.org / playwright 的 CDN 会非常慢，
-# 慢到看起来像卡死（尤其配上 --quiet 时完全没有任何进度提示，更难判断）。
-# 所以默认就走国内镜像，并允许用环境变量覆盖。
-PIP_INDEX="${SCOUT_PIP_INDEX:-https://mirrors.aliyun.com/pypi/simple/}"
-PIP_HOST="${SCOUT_PIP_HOST:-mirrors.aliyun.com}"
-# Playwright 的浏览器本体也走镜像
+# 在阿里云 ECS 上直连 pypi.org 极慢，而 --quiet 会把进度吞掉，
+# 慢到看起来像卡死。所以默认走国内镜像。
+#
+# **但不能只写一个镜像**：实测阿里云公网镜像会缺 .metadata 文件
+# （pip 23+ 走 PEP 658 会先请求它），报
+#     HTTP error 404 ... pydantic-2.14.0-py3-none-any.whl.metadata
+# 所以这里准备一串候选，按顺序试，哪个成用哪个。
+PIP_MIRRORS=(
+  "${SCOUT_PIP_INDEX:-https://pypi.tuna.tsinghua.edu.cn/simple}"
+  "https://mirrors.cloud.tencent.com/pypi/simple"
+  "https://mirrors.cloud.aliyuncs.com/pypi/simple/"
+  "https://mirrors.aliyun.com/pypi/simple/"
+  "https://pypi.org/simple"
+)
+# Playwright 的浏览器本体走镜像（npmmirror 同步得比较全）
 export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright}"
 
 FAILED=0
@@ -135,29 +144,37 @@ fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate" || { bad "激活 venv 失败"; exit 1; }
 
-# 配好镜像，后面所有 pip 操作都走它
-mkdir -p "$HOME/.pip"
-cat > "$HOME/.pip/pip.conf" <<PIPCONF
-[global]
-index-url = $PIP_INDEX
-trusted-host = $PIP_HOST
-timeout = 60
-PIPCONF
-ok "pip 镜像已设为 $PIP_INDEX"
-
-note "升级 pip（进度可见，慢的话是在下载，别急着中断）…"
+note "升级 pip…"
 python -m pip install --upgrade pip 2>&1 | tail -2 || warn "pip 升级失败（不致命，继续）"
 
-note "装 Python 依赖：playwright / typer / rich / PyYAML / fastapi / uvicorn"
-note "（playwright 的 wheel 约 40MB，走阿里云镜像一般几十秒）"
-if python -m pip install \
-      "playwright>=1.47" "typer>=0.12" "rich>=13.7" "PyYAML>=6.0" \
-      "fastapi>=0.115" "uvicorn>=0.30" 2>&1 | tail -5; then
-  ok "Python 依赖装好了"
+PY_PKGS=(playwright typer rich PyYAML fastapi uvicorn)
+note "装 Python 依赖：${PY_PKGS[*]}"
+note "（playwright 的 wheel 约 40MB。慢的话是在下载，别急着中断）"
+
+PIP_OK=0
+PIP_USED=""
+for M in "${PIP_MIRRORS[@]}"; do
+  HOST="$(echo "$M" | cut -d/ -f3)"
+  echo ""
+  note "试 $HOST …"
+  if python -m pip install -i "$M" --trusted-host "$HOST" "${PY_PKGS[@]}" 2>&1 | tail -3; then
+    PIP_OK=1; PIP_USED="$M"; break
+  fi
+  warn "$HOST 不行，换下一个"
+done
+
+if [ "$PIP_OK" -eq 1 ]; then
+  ok "Python 依赖装好了（用了 $(echo "$PIP_USED" | cut -d/ -f3)）"
+  # 把成功的镜像记下来，以后用户自己装包也走它
+  mkdir -p "$HOME/.pip"
+  printf '[global]\nindex-url = %s\ntrusted-host = %s\ntimeout = 60\n' \
+    "$PIP_USED" "$(echo "$PIP_USED" | cut -d/ -f3)" > "$HOME/.pip/pip.conf"
+  ok "已写入 ~/.pip/pip.conf，以后 pip 自动走这个镜像"
 else
-  bad "Python 依赖装失败。可以手动重试："
+  bad "所有镜像都失败了。手动重试（挑一个）："
   note "source $VENV_DIR/bin/activate"
-  note "pip install -i $PIP_INDEX playwright typer rich PyYAML fastapi uvicorn"
+  note "pip install -i https://pypi.tuna.tsinghua.edu.cn/simple ${PY_PKGS[*]}"
+  note "pip install -i https://mirrors.cloud.tencent.com/pypi/simple ${PY_PKGS[*]}"
   exit 1
 fi
 
