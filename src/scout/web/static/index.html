@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -18,6 +18,25 @@
   input::placeholder{color:var(--dim)}
   .chip{display:inline-block;background:var(--panel2);border:1px solid var(--line);
         border-radius:20px;padding:1px 9px;font-size:12px;margin-right:5px;color:var(--dim)}
+  .hero{background:linear-gradient(135deg,#172033 0%,#1a1f2b 60%,#151a24 100%);
+        border:1px solid var(--line);border-radius:14px;padding:22px 24px;margin-bottom:22px}
+  .hero h2{margin:0 0 10px;font-size:19px;font-weight:600}
+  .hero p{margin:0;color:var(--dim);line-height:1.85;max-width:900px}
+  .hero b{color:var(--fg)}
+  .flow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:16px;font-size:13px}
+  .flow span{background:#0f1420;border:1px solid var(--line);border-radius:8px;
+             padding:5px 11px;color:var(--fg)}
+  .flow i{color:var(--dim);font-style:normal}
+  .lamp{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:7px}
+  .step{display:flex;gap:12px;align-items:flex-start;padding:12px 14px;
+        border:1px solid var(--line);border-radius:10px;margin-bottom:9px;background:var(--panel)}
+  .step.next{border-color:var(--accent);background:#16202f}
+  .step .no{width:22px;height:22px;border-radius:50%;flex:0 0 22px;text-align:center;
+            line-height:22px;font-size:12px;background:var(--panel2);color:var(--dim)}
+  .step.done .no{background:var(--ok);color:#08130d}
+  .step.next .no{background:var(--accent);color:#06121f}
+  .step .t{font-weight:600;font-size:14px}
+  .step .d{color:var(--dim);font-size:13px;margin-top:3px;line-height:1.65}
   header{position:sticky;top:0;z-index:10;background:var(--panel);border-bottom:1px solid var(--line);
          padding:14px 20px;display:flex;align-items:center;gap:16px;flex-wrap:wrap}
   h1{font-size:16px;margin:0;font-weight:600}
@@ -67,7 +86,8 @@
   <div class="grid" id="cards"></div>
 
   <nav>
-    <button data-tab="collect" class="active">采集</button>
+    <button data-tab="home" class="active">概览</button>
+    <button data-tab="collect">采集</button>
     <button data-tab="ai">AI 画像</button>
     <button data-tab="likers">点赞人档案</button>
     <button data-tab="likerworks">点赞人作品</button>
@@ -83,7 +103,43 @@
     <button data-tab="events">实时日志</button>
   </nav>
 
-  <section id="tab-collect" class="active">
+  <section id="tab-home" class="active">
+    <div class="hero">
+      <h2>看懂「谁在看你」，然后决定下一条发什么</h2>
+      <p>
+        这个工具从你自己的抖音账号出发：取回每条作品的<b>完整点赞人名单</b>，
+        拉回他们的公开主页与作品，交给大模型分析每个点赞人是谁、
+        和你的内容有多契合，最后反哺到<b>作品评价</b>和<b>下一步内容计划</b>。
+      </p>
+      <div class="flow">
+        <span>① 采集点赞人</span><i>→</i>
+        <span>② AI 画像</span><i>→</i>
+        <span>③ 数据可视化</span><i>→</i>
+        <span>④ 评价我的作品</span><i>→</i>
+        <span>⑤ 下一步计划</span>
+      </div>
+    </div>
+
+    <div class="row" style="margin-bottom:14px">
+      <b>系统就绪状态</b>
+      <button class="mini" id="sysRefresh" style="margin-left:auto">刷新</button>
+    </div>
+    <div id="sysCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin-bottom:20px"></div>
+
+    <div class="row" style="margin-bottom:10px">
+      <b>数据规模</b>
+      <span class="dim" id="dataScaleNote"></span>
+    </div>
+    <div id="dataCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px"></div>
+
+    <div class="row" style="margin-bottom:10px">
+      <b>上手步骤</b>
+      <span class="dim">从「下一步」开始做就行</span>
+    </div>
+    <div id="stepList"></div>
+  </section>
+
+  <section id="tab-collect">
     <div class="card" id="loginBox" style="margin-bottom:16px">
       <div class="row" style="align-items:center">
         <b>登录状态</b>
@@ -700,6 +756,83 @@ $('#colStop').onclick = async ()=>{
   await fetch('/api/collect/stop', {method:'POST'});
 };
 
+// ── 概览：空数据时也要能看、能懂、能上手 ─────────────────
+let sysCache = null;
+
+async function loadHome(){
+  let s = {};
+  try { s = await get('/api/system'); } catch(e) {
+    $('#sysCards').innerHTML = '<div class="card dim">读取失败：' + e.message + '</div>';
+    return;
+  }
+  sysCache = s;
+  const c = s.counts || {}, t = s.tasks || {}, lg = s.login || {}, lm = s.llm || {};
+
+  // 系统就绪状态：三个灯
+  const lamp = ok => `<span class="lamp" style="background:${ok ? 'var(--ok)' : 'var(--bad)'}"></span>`;
+  const sysCard = (title, ok, main, sub) => `<div class="card">
+      <div class="k">${lamp(ok)}${title}</div>
+      <div class="v" style="font-size:16px">${esc(main)}</div>
+      ${sub?`<div class="s" style="white-space:normal">${esc(sub)}</div>`:''}
+    </div>`;
+
+  $('#sysCards').innerHTML =
+    sysCard('抖音登录态', lg.ok, lg.ok ? (lg.nickname || '已配置') : '未就绪',
+            lg.ok ? `方式：${lg.how}` : (lg.hint || '需要登录')) +
+    sysCard('AI 大模型', lm.ok, lm.ok ? lm.model : '未配置',
+            lm.ok ? 'DeepSeek API 已就绪' : (lm.hint || '需要配置 API Key')) +
+    sysCard('数据目录', true, s.account, s.data_dir) +
+    sysCard('待办任务', t.ready > 0, `${t.ready || 0} 个`,
+            t.ready > 0 ? '点「采集」页开始处理' : '没有待办');
+
+  // 数据规模
+  const dataCard = (k, v, s) => `<div class="card">
+      <div class="k">${k}</div><div class="v">${num(v)}</div>
+      ${s?`<div class="s">${s}</div>`:''}</div>`;
+  $('#dataCards').innerHTML =
+    dataCard('点赞人', c.users || 0, '') +
+    dataCard('点赞关系', c.like_edges || 0, '') +
+    dataCard('我的作品', c.my_works || 0, '') +
+    dataCard('作品库', c.works || 0, '含点赞人的作品') +
+    dataCard('AI 画像', c.analyses || 0, c.has_review ? '已出作品评价' : '');
+  $('#dataScaleNote').textContent = s.empty
+    ? '还是空的 —— 按下面步骤走一遍就有数据了'
+    : '';
+
+  // 上手步骤
+  const steps = s.steps || [];
+  $('#stepList').innerHTML = steps.map((st, i)=>{
+    const cls = st.done ? 'done' : (st.key === s.next_step ? 'next' : '');
+    const no = st.done ? '✓' : (i + 1);
+    const btn = st.done ? '' :
+      `<button class="mini" style="margin-left:auto;flex:0 0 auto"
+               onclick="gotoStep('${st.action}','${st.kinds || ''}')">
+         ${st.key === s.next_step ? '开始 →' : '去做'}</button>`;
+    return `<div class="step ${cls}">
+      <div class="no">${no}</div>
+      <div style="flex:1;min-width:0">
+        <div class="t">${esc(st.title)}</div>
+        <div class="d">${esc(st.desc)}</div>
+      </div>${btn}
+    </div>`;
+  }).join('') || '<div class="card dim">没有步骤</div>';
+}
+
+function switchTab(name){
+  const btn = document.querySelector(
+av button[data-tab=${name}]);
+  if (btn) btn.click();
+}
+
+function gotoStep(action, kinds){
+  if (action === 'ai') { switchTab('ai'); return; }
+  switchTab('collect');
+  if (kinds) { $('#colKind').value = kinds; }
+  setTimeout(()=>{ $('#colStart').scrollIntoView({behavior:'smooth', block:'center'}); }, 120);
+}
+
+$('#sysRefresh').onclick = ()=>{ loadHome(); loadCollect(); };
+
 async function loadAI(){
   await loadCreator();
   // 账号标识必须一直可见 —— 看不到就会发生"以为在看 A 号数据，其实是 B 号的"
@@ -971,7 +1104,7 @@ $('#uwSearch').oninput = ()=>{ clearTimeout(uwTimer); uwTimer = setTimeout(loadL
 let searchTimer = null;
 $('#likerSearch').oninput = ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(loadLikers, 300); };
 
-const LOADERS = {collect:loadCollect, storage:loadStorage, ai:loadAI, coverage:loadCoverage, likers:loadLikers, likerworks:loadLikerWorks,
+const LOADERS = {home:loadHome, collect:loadCollect, storage:loadStorage, ai:loadAI, coverage:loadCoverage, likers:loadLikers, likerworks:loadLikerWorks,
                  users:loadUsers, works:loadWorks, tasks:loadTasks,
                  requests:loadRequests, raw:loadRaw, config:loadConfig, report:loadReport};
 function reload(tab){
@@ -1006,7 +1139,7 @@ function connect(){
 
 (async function boot(){
   try{ renderCards(await get('/api/overview')); }catch(e){ $('#cards').innerHTML = `<div class="card bad">无法读取数据库：${e.message}。请先在终端运行 <code>scout init</code>。</div>`; }
-  reload('collect');
+  reload('home');
   connectCollect();
   connectLogin();
   connect();

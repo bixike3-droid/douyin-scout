@@ -19,3 +19,5 @@ dist/
 config/llm.local.yaml
 
 COMMIT_MSG.txt
+
+cm.txt

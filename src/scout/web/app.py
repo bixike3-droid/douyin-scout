@@ -529,6 +529,139 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # ── 概览：空数据时也要能看、能懂、能上手 ─────────────────
+
+    @app.get("/api/system")
+    def api_system() -> JSONResponse:
+        """系统就绪状态 + 数据规模 + 引导步骤。
+
+        为什么要有它：数据库是空的时候，页面上全是空卡片，
+        来访者（比如评委）不知道这是什么、下一步该干什么。
+        这个接口给出"能不能用、缺什么、该做什么"。
+        """
+        from ..app import AppContext
+        from ..store.account import stored_identity
+
+        ctx = AppContext.create(migrate_db=False)
+        try:
+            cfg = ctx.config
+            tier_a = cfg.tier("a")
+            state_file = ctx.paths.state_dir / f"tier_{tier_a.name}_storage.json"
+            profile_dir = tier_a.resolved_profile_dir(ctx.paths)
+
+            sec_uid, nickname = stored_identity(ctx)
+
+            counts = {
+                "users": ctx.db.scalar("SELECT COUNT(*) FROM users", default=0),
+                "works": ctx.db.scalar("SELECT COUNT(*) FROM works", default=0),
+                "my_works": ctx.db.scalar(
+                    "SELECT COUNT(*) FROM works WHERE is_mine = 1", default=0
+                ),
+                "like_edges": ctx.db.scalar("SELECT COUNT(*) FROM like_edges", default=0),
+                "analyses": ctx.db.scalar(
+                    "SELECT COUNT(*) FROM v_llm_latest WHERE task='profile'", default=0
+                ),
+                "has_review": ctx.db.scalar(
+                    "SELECT COUNT(*) FROM llm_results WHERE task='review'", default=0
+                ),
+                "has_plan": ctx.db.scalar(
+                    "SELECT COUNT(*) FROM llm_results WHERE task='plan'", default=0
+                ),
+            }
+            tasks = ctx.tasks.stats()
+
+            # 登录态：用 storage_state 时看文件在不在；否则看持久 profile 有没有内容
+            if tier_a.use_storage_state:
+                login_ok = state_file.is_file()
+                login_how = f"登录态文件（{state_file.name}）"
+                login_hint = (
+                    "" if login_ok else
+                    "服务器上没有登录态文件。需要在本地登录后把这个文件传上来。"
+                )
+            else:
+                login_ok = profile_dir.is_dir() and any(profile_dir.iterdir())
+                login_how = f"持久 profile（{profile_dir.name}）"
+                login_hint = "" if login_ok else "还没登录过。点「登录抖音」扫码。"
+
+            # 引导步骤：按"下一步该做什么"排序
+            steps = [
+                {
+                    "key": "login",
+                    "title": "登录抖音",
+                    "desc": "采集前需要一次登录。服务器上没法扫码，所以用本地导出的登录态。",
+                    "done": bool(login_ok and sec_uid),
+                    "action": "login",
+                },
+                {
+                    "key": "identify",
+                    "title": "识别账号",
+                    "desc": "让程序知道「我是谁」，才能区分我的作品和点赞人的作品。",
+                    "done": bool(sec_uid),
+                    "action": "collect",
+                    "kinds": "fetch_self",
+                },
+                {
+                    "key": "discover",
+                    "title": "采集我的作品与点赞人",
+                    "desc": "拉取作品的完整点赞人名单，以及每个点赞人的公开资料。",
+                    "done": counts["like_edges"] > 0,
+                    "action": "collect",
+                    "kinds": "",
+                },
+                {
+                    "key": "works",
+                    "title": "采集点赞人的作品",
+                    "desc": "AI 做画像需要「他发过什么」，这一步是原料。",
+                    "done": counts["works"] > 0,
+                    "action": "collect",
+                    "kinds": "fetch_user_works",
+                },
+                {
+                    "key": "profile",
+                    "title": "生成 AI 画像",
+                    "desc": "用 DeepSeek 分析每个点赞人是谁、和你的契合度。",
+                    "done": counts["analyses"] > 0,
+                    "action": "ai",
+                },
+                {
+                    "key": "advise",
+                    "title": "作品评价与下一步计划",
+                    "desc": "基于受众分布评价你的作品，并给出可执行的内容计划。",
+                    "done": bool(counts["has_review"] and counts["has_plan"]),
+                    "action": "ai",
+                },
+            ]
+            next_step = next((s for s in steps if not s["done"]), None)
+
+            return JSONResponse({
+                "account": ctx.paths.account,
+                "data_dir": str(ctx.paths.data_dir),
+                "login": {
+                    "ok": bool(login_ok),
+                    "how": login_how,
+                    "nickname": nickname,
+                    "sec_uid": sec_uid,
+                    "hint": login_hint,
+                    "use_storage_state": tier_a.use_storage_state,
+                },
+                "llm": {
+                    "ok": cfg.llm.enabled,
+                    "model": cfg.llm.model,
+                    "hint": "" if cfg.llm.enabled else "没配置 DeepSeek API Key，AI 分析不可用。",
+                },
+                "browser": {
+                    "channel": cfg.browser.channel or "自带的 Chromium",
+                    "headless": tier_a.headless,
+                },
+                "counts": counts,
+                "tasks": tasks,
+                "steps": steps,
+                "next_step": next_step["key"] if next_step else "",
+                "empty": counts["users"] == 0 and counts["works"] == 0,
+            })
+        finally:
+            ctx.close()
+
     @app.get("/api/storage")
     def api_storage() -> JSONResponse:
         """归档现状 + 清理预览。让用户看到"还能撑多久"。"""
