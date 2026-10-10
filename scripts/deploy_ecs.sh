@@ -18,6 +18,16 @@ cd "$PROJECT_DIR"
 
 VENV_DIR="${SCOUT_VENV:-$HOME/scout-venv}"
 ACCOUNT="${SCOUT_ACCOUNT:-main}"
+
+# ── 国内镜像 ────────────────────────────────────────────────
+# 在阿里云 ECS 上直连 pypi.org / playwright 的 CDN 会非常慢，
+# 慢到看起来像卡死（尤其配上 --quiet 时完全没有任何进度提示，更难判断）。
+# 所以默认就走国内镜像，并允许用环境变量覆盖。
+PIP_INDEX="${SCOUT_PIP_INDEX:-https://mirrors.aliyun.com/pypi/simple/}"
+PIP_HOST="${SCOUT_PIP_HOST:-mirrors.aliyun.com}"
+# Playwright 的浏览器本体也走镜像
+export PLAYWRIGHT_DOWNLOAD_HOST="${PLAYWRIGHT_DOWNLOAD_HOST:-https://npmmirror.com/mirrors/playwright}"
+
 FAILED=0
 
 say()  { printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
@@ -124,15 +134,30 @@ fi
 
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate" || { bad "激活 venv 失败"; exit 1; }
-python -m pip install --quiet --upgrade pip >/dev/null 2>&1 || warn "pip 升级失败（不致命）"
 
-if python -m pip install --quiet \
+# 配好镜像，后面所有 pip 操作都走它
+mkdir -p "$HOME/.pip"
+cat > "$HOME/.pip/pip.conf" <<PIPCONF
+[global]
+index-url = $PIP_INDEX
+trusted-host = $PIP_HOST
+timeout = 60
+PIPCONF
+ok "pip 镜像已设为 $PIP_INDEX"
+
+note "升级 pip（进度可见，慢的话是在下载，别急着中断）…"
+python -m pip install --upgrade pip 2>&1 | tail -2 || warn "pip 升级失败（不致命，继续）"
+
+note "装 Python 依赖：playwright / typer / rich / PyYAML / fastapi / uvicorn"
+note "（playwright 的 wheel 约 40MB，走阿里云镜像一般几十秒）"
+if python -m pip install \
       "playwright>=1.47" "typer>=0.12" "rich>=13.7" "PyYAML>=6.0" \
-      "fastapi>=0.115" "uvicorn>=0.30"; then
+      "fastapi>=0.115" "uvicorn>=0.30" 2>&1 | tail -5; then
   ok "Python 依赖装好了"
 else
-  bad "Python 依赖装失败。试试换源："
-  note "pip install -i https://mirrors.aliyun.com/pypi/simple/ playwright typer rich PyYAML fastapi uvicorn"
+  bad "Python 依赖装失败。可以手动重试："
+  note "source $VENV_DIR/bin/activate"
+  note "pip install -i $PIP_INDEX playwright typer rich PyYAML fastapi uvicorn"
   exit 1
 fi
 
