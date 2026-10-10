@@ -103,8 +103,26 @@ browser:
     - "**/log/webcast/**"
 
 storage:
-  # 原始归档保留天数，0 = 永不删除（强烈建议保持 0）
-  raw_retention_days: 0
+  # ── 保留策略（scout cleanup 用）────────────────────────
+  #
+  # 归档正文保留几天。**只删正文，保留元数据** ——
+  # raw_blobs 行只占几字节，raw/ 下的正文占几十 MB。
+  # 留下 sha256/url/byte_size/collected_at，"曾经采过什么"仍可追溯；
+  # 代价是不能再用 scout replay 回放重解那段时期的响应。
+  # 0 = 永不清理（磁盘会慢慢满）。
+  raw_retention_days: 7
+
+  # 请求日志 / 事件日志保留几天
+  log_retention_days: 30
+
+  # 已完成任务保留几天（pending / failed 不受影响）
+  task_retention_days: 14
+
+  # 点赞边多久没被再次确认就标记为陈旧。
+  # **只标记不删除** —— 可能是接口偶发返回不全，删了就找不回来。
+  # 作用：有人取消点赞后，那条边会被标出来，让数据不至于悄悄偏离现实。
+  edge_stale_days: 30
+
   # 单个归档文件超过这个字节数就不落盘，只记元数据
   raw_max_bytes: 8000000
   # 是否连静态资源（JS/CSS/图片/埋点）的正文也读进来并归档。

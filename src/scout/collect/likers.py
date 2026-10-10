@@ -19,6 +19,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..parse.registry import ParseResult
+from ..util import iso
 from .api_base import COMMON_PARAMS, ApiCollector
 
 API_BASE = "https://www.douyin.com/aweme/v1/web/favorite/list/?"
@@ -64,10 +65,24 @@ class LikersCollector(ApiCollector):
 
         added = ctx.like_edges.add_many(parsed.like_edges, tier="b", raw_blob_id=raw_id)
 
+        # **这次拿到的是完整名单，所以名单里的人都被"再次确认"了。**
+        # 更新 last_confirmed_at，陈旧判断靠它。
+        # 没在这次名单里的人不会被更新 —— 时间久了就说明对方可能取消了点赞。
+        now = iso()
+        for edge in parsed.like_edges:
+            sec_uid = edge.get("sec_uid")
+            aweme_id = edge.get("aweme_id")
+            if sec_uid and aweme_id:
+                ctx.db.execute(
+                    "UPDATE like_edges SET last_confirmed_at = ?, is_stale = 0 "
+                    "WHERE sec_uid = ? AND aweme_id = ?",
+                    (now, sec_uid, aweme_id),
+                )
+
         # 接口已经给了完整资料，这些人不用再跑主页采集
         for user in parsed.users:
             sec_uid = user.get("sec_uid")
             if sec_uid and user.get("follower_count") is not None:
                 ctx.users.mark_state(sec_uid, "ok", tier="b")
 
-        return {"users_saved": saved, "new_edges": added}
+        return {"users_saved": saved, "new_edges": added, "confirmed": len(parsed.like_edges)}

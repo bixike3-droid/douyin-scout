@@ -183,7 +183,21 @@ class BrowserConfig:
 
 @dataclass(frozen=True)
 class StorageConfig:
-    raw_retention_days: int = 0
+    # ── 保留策略 ────────────────────────────────────────────
+    #
+    # 归档正文保留几天。**只删正文，保留元数据** ——
+    # raw_blobs 行只占几字节，raw/ 下的正文占几十 MB。
+    # 留下来 sha256/url/byte_size/collected_at，"曾经采过什么"仍可追溯。
+    # 0 = 永不清理（会让磁盘慢慢满）。
+    raw_retention_days: int = 7
+    # 请求日志 / 事件日志保留几天
+    log_retention_days: int = 30
+    # 已完成的任务保留几天（pending/failed 不删）
+    task_retention_days: int = 14
+    # 点赞边多久没被再次确认就标记为陈旧。
+    # **只标记不删除** —— 可能是接口偶发返回不全，删了就找不回来。
+    edge_stale_days: int = 30
+
     raw_max_bytes: int = 8_000_000
     # 是否归档静态资源（JS/CSS/图片/埋点）。
     # 默认 False：一次页面加载几百个静态文件，存下来一天涨几个 GB，

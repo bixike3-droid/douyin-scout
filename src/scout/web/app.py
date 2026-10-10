@@ -448,6 +448,54 @@ def create_app() -> FastAPI:
         finally:
             ctx.close()
 
+    @app.get("/api/storage")
+    def api_storage() -> JSONResponse:
+        """归档现状 + 清理预览。让用户看到"还能撑多久"。"""
+        from ..app import AppContext
+        from ..store.cleanup import archive_stats, plan_cleanup
+
+        ctx = AppContext.create(migrate_db=False)
+        try:
+            stats = archive_stats(ctx)
+            plan = plan_cleanup(ctx)
+            return JSONResponse({
+                "archive": stats,
+                "plan": plan.to_dict(),
+                "thresholds": {
+                    "raw_retention_days": ctx.config.storage.raw_retention_days,
+                    "log_retention_days": ctx.config.storage.log_retention_days,
+                    "task_retention_days": ctx.config.storage.task_retention_days,
+                    "edge_stale_days": ctx.config.storage.edge_stale_days,
+                },
+            })
+        finally:
+            ctx.close()
+
+    @app.post("/api/storage/cleanup")
+    def api_storage_cleanup() -> JSONResponse:
+        """执行一次清理（删归档正文、清日志、标记陈旧边）。
+
+        对比赛作品来说，清理不该只在命令行里做 ——
+        但它是破坏性的，所以接口只做"按当前策略执行"，不接受临时改阈值。
+        """
+        from ..app import AppContext
+        from ..store.cleanup import plan_cleanup, run_cleanup
+
+        ctx = AppContext.create(migrate_db=False)
+        try:
+            plan = plan_cleanup(ctx)
+            if not (plan.raw_rows or plan.log_rows or plan.task_rows or plan.unconfirmed_edges):
+                return JSONResponse({"cleaned": False, "reason": "没有需要清理的内容"})
+            result = run_cleanup(ctx, plan, dry_run=False)
+            ctx.db.log_event(
+                "info", "cleanup",
+                f"网页触发清理：删 {result['files_deleted']} 个文件，"
+                f"释放 {result['bytes_freed'] / 1048576:.1f} MB",
+            )
+            return JSONResponse({"cleaned": True, **result})
+        finally:
+            ctx.close()
+
     @app.get("/api/account")
     def api_account() -> JSONResponse:
         """当前用的是哪个账号的数据目录 —— 页面上必须能一眼看到。

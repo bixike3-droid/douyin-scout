@@ -1,4 +1,4 @@
-﻿"""调度引擎：断点续采 + 配额 + 熔断 的执行者。
+"""调度引擎：断点续采 + 配额 + 熔断 的执行者。
 
 一次 run_round 的行为：
 1. 先把崩溃遗留的 running 任务捞回来。
@@ -64,7 +64,7 @@ class Engine:
         """
         ctx = self.ctx
         counts = {"notice": 0, "profile": 0, "works": 0, "likers": 0, "user_works": 0,
-                  "self": 0, "stats_refresh": 0}
+                  "self": 0, "stats_refresh": 0, "cleanup": 0}
 
         notice_url = ctx.config.targets.notice_url
         tier_a = None
@@ -124,6 +124,36 @@ class Engine:
             # 按作者去重：作品列表接口是按人取的，一个人刷新一次就能覆盖他所有作品
             if ctx.tasks.enqueue("fetch_user_works", sec_uid, liker_tier, priority=80):
                 counts["stats_refresh"] += 1
+
+        # ── 保留策略：每天最多自动清理一次 ──
+        #
+        # 为什么放在 seed 里、又为什么要限"每天一次"：
+        # 清理本身很便宜（删文件 + 几条 UPDATE），但它是**破坏性**的。
+        # 每轮都跑没必要，而且万一配置写错（比如 raw_days 填了 1），
+        # 高频触发会让后果放大得很快。一天一次是安全节奏。
+        try:
+            from ..store.cleanup import plan_cleanup, run_cleanup
+
+            today = ctx.db.scalar("SELECT date('now')", default="") or ""
+            if (
+                today
+                and ctx.config.storage.raw_retention_days > 0
+                and ctx.cursors.get("last_cleanup_day") != today
+            ):
+                plan = plan_cleanup(ctx)
+                if plan.raw_rows or plan.log_rows or plan.task_rows or plan.unconfirmed_edges:
+                    res = run_cleanup(ctx, plan, dry_run=False)
+                    ctx.cursors.set("last_cleanup_day", today)
+                    counts["cleanup"] = res["files_deleted"]
+                    ctx.db.log_event(
+                        "info", "cleanup",
+                        f"自动清理：删 {res['files_deleted']} 个归档文件"
+                        f"（{res['bytes_freed'] / 1048576:.1f} MB），"
+                        f"标记陈旧点赞边 {res['edges_marked']} 条",
+                    )
+        except Exception as exc:
+            # 清理失败不能影响采集 —— 它只是维护工作
+            ctx.db.log_event("warn", "cleanup", f"自动清理失败（不影响采集）：{exc}")
 
         return counts
 

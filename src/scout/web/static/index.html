@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -77,6 +77,7 @@
     <button data-tab="tasks">任务</button>
     <button data-tab="requests">请求日志</button>
     <button data-tab="raw">原始归档</button>
+    <button data-tab="storage">存储</button>
     <button data-tab="config">配置</button>
     <button data-tab="report">画像报告</button>
     <button data-tab="events">实时日志</button>
@@ -173,6 +174,17 @@
     <div id="requests"></div>
   </section>
   <section id="tab-raw"><div id="raw"></div></section>
+  <section id="tab-storage">
+    <div class="row" style="margin-bottom:14px">
+      <button class="mini" id="stCleanup">执行清理</button>
+      <button class="mini" id="stRefresh">刷新</button>
+      <span class="dim" id="stStatus"></span>
+    </div>
+    <div id="stCards" style="margin-bottom:16px"></div>
+    <div class="k" style="margin-bottom:6px">按日期分布（主体是接口响应正文）</div>
+    <div id="stDays"></div>
+  </section>
+
   <section id="tab-config"><pre id="config">加载中…</pre></section>
   <section id="tab-report"><pre id="report">加载中…</pre></section>
   <section id="tab-events"><div id="log"></div></section>
@@ -753,6 +765,66 @@ async function loadRaw(){
     {k:'content_type',label:'类型'},{k:'byte_size',label:'字节'},{k:'url',label:'URL'}
   ], rows, (c,r)=> c.k==='byte_size'?num(r[c.k]):esc(r[c.k]));
 }
+// ── 存储与保留策略 ────────────────────────────────────────
+async function loadStorage(){
+  let d = {};
+  try { d = await get('/api/storage'); } catch(e) {
+    $('#stCards').innerHTML = '<div class="card dim">读取失败：' + e.message + '</div>';
+    return;
+  }
+  const a = d.archive || {}, p = d.plan || {}, t = d.thresholds || {};
+
+  const card = (k, v, s) => `<div class="card" style="display:inline-block;min-width:190px;margin:0 10px 10px 0">
+      <div class="k">${k}</div><div class="v">${v}</div>${s?`<div class="s">${s}</div>`:''}</div>`;
+
+  $('#stCards').innerHTML =
+    card('归档正文', `${a.disk_mb} MB`, `${a.disk_files} 个文件`) +
+    card('归档记录', num(a.rows), `已清正文 ${num(a.pruned_rows)} 条`) +
+    card('保留策略', `${t.raw_retention_days} 天`, `日志 ${t.log_retention_days} 天 · 任务 ${t.task_retention_days} 天`) +
+    card('最早归档', (a.oldest||'—').slice(0,10), '');
+
+  const todo = [];
+  if (p.raw_files) todo.push(`① 归档正文：删 ${p.raw_files} 个文件（${p.raw_mb} MB）`);
+  const logs = Object.entries(p.log_rows||{}).map(([k,v])=>`${k} ${v} 行`).join('、');
+  if (logs) todo.push(`② 日志：${logs}`);
+  if (p.unconfirmed_edges) todo.push(`③ 点赞边：标记陈旧 ${p.unconfirmed_edges} 条（不删除）`);
+  if (p.task_rows) todo.push(`④ 已完成任务：删 ${p.task_rows} 行`);
+
+  $('#stStatus').textContent = todo.length ? `待清理 ${todo.length} 项` : '没有需要清理的内容';
+  $('#stCards').innerHTML += `<div class="card" style="width:100%;margin-top:6px">
+    <div class="k">按当前策略，下次清理会处理</div>
+    <div class="s" style="white-space:pre-wrap;margin-top:6px">${
+      todo.length ? esc(todo.join('\n')) : '（无）'}</div>
+    <div class="s" style="margin-top:8px;color:var(--dim)">
+      删的是归档正文，元数据会保留 —— "曾经采过什么"仍可追溯；
+      陈旧的点赞边只标记不删除（可能是接口偶发）。</div>
+  </div>`;
+
+  const days = (a.days || []).slice().reverse();
+  $('#stDays').innerHTML = days.length ? `<table><thead><tr>
+      <th>日期</th><th>文件数</th><th>占用</th></tr></thead><tbody>` +
+    days.map(x=>`<tr><td>${esc(x.date)}</td><td>${num(x.files)}</td><td>${x.mb} MB</td></tr>`).join('') +
+    '</tbody></table>' : '<div class="card dim">归档目录是空的</div>';
+}
+
+$('#stRefresh').onclick = loadStorage;
+$('#stCleanup').onclick = async ()=>{
+  if (!confirm('执行清理？\n\n• 会删除超过保留期的归档正文（元数据保留）\n• 会删除超期日志\n• 陈旧的点赞边只会标记，不会删除\n\n确定继续？')) return;
+  $('#stStatus').textContent = '清理中…';
+  try {
+    const r = await fetch('/api/storage/cleanup', {method:'POST'});
+    const d = await r.json();
+    if (d.cleaned) {
+      $('#stStatus').textContent =
+        `✓ 已删 ${d.files_deleted} 个文件，释放 ${(d.bytes_freed/1048576).toFixed(2)} MB` +
+        `，标记陈旧边 ${d.edges_marked} 条，删任务 ${d.tasks_deleted} 行`;
+    } else {
+      $('#stStatus').textContent = d.reason || '没有需要清理的';
+    }
+    loadStorage();
+  } catch(e) { $('#stStatus').textContent = '失败：' + e.message; }
+};
+
 async function loadConfig(){ try{ $('#config').textContent = JSON.stringify(await get('/api/config'), null, 2);}catch(e){ $('#config').textContent = '加载失败：'+e.message; } }
 async function loadReport(){ try{ $('#report').textContent = (await get('/api/report')).markdown; }catch(e){ $('#report').textContent = '加载失败：'+e.message; } }
 
@@ -774,7 +846,7 @@ $('#uwSearch').oninput = ()=>{ clearTimeout(uwTimer); uwTimer = setTimeout(loadL
 let searchTimer = null;
 $('#likerSearch').oninput = ()=>{ clearTimeout(searchTimer); searchTimer = setTimeout(loadLikers, 300); };
 
-const LOADERS = {collect:loadCollect, ai:loadAI, coverage:loadCoverage, likers:loadLikers, likerworks:loadLikerWorks,
+const LOADERS = {collect:loadCollect, storage:loadStorage, ai:loadAI, coverage:loadCoverage, likers:loadLikers, likerworks:loadLikerWorks,
                  users:loadUsers, works:loadWorks, tasks:loadTasks,
                  requests:loadRequests, raw:loadRaw, config:loadConfig, report:loadReport};
 function reload(tab){

@@ -1139,6 +1139,84 @@ def circuit_open(tier: str = typer.Argument("b"), reason: str = typer.Option("�
     console.print(f"[yellow]{tier} 已熔断：{reason}[/]")
 
 
+@app.command("cleanup")
+def cmd_cleanup(
+    dry_run: bool = typer.Option(
+        True, "--dry-run/--apply",
+        help="默认只预览不动手。确认要执行加 --apply",
+    ),
+    raw_days: int = typer.Option(-1, "--raw-days", help="归档正文保留天数，覆盖配置"),
+    log_days: int = typer.Option(-1, "--log-days", help="日志保留天数，覆盖配置"),
+    task_days: int = typer.Option(-1, "--task-days", help="已完成任务保留天数，覆盖配置"),
+    edge_days: int = typer.Option(-1, "--edge-days", help="点赞边陈旧阈值，覆盖配置"),
+    force: bool = typer.Option(False, "--yes", "-y", help="跳过确认"),
+) -> None:
+    """按保留策略清理：归档正文、日志、陈旧标记、已完成任务。
+
+    三条取舍（都是宁可保守）：
+
+    - **删正文，保留元数据** —— raw_blobs 行只占几字节，
+      留下 sha256/url/byte_size，"曾经采过什么"仍可追溯
+    - **陈旧的点赞边只标记，不删除** —— 可能是接口偶发，删了找不回来
+    - **默认 dry-run** —— 破坏性操作必须先能预览
+    """
+    from .store.cleanup import archive_stats, plan_cleanup, run_cleanup
+
+    with _ctx() as ctx:
+        cur = archive_stats(ctx)
+        console.print(_kv_table("归档现状", {
+            "归档记录": f"{cur['rows']} 条（其中已清正文 {cur['pruned_rows']} 条）",
+            "正文占用": f"{cur['disk_mb']} MB / {cur['disk_files']} 个文件",
+            "保留策略": f"{cur['retention_days']} 天",
+            "最早归档": (cur["oldest"] or "—")[:19],
+        }))
+
+        overrides = {
+            k: v for k, v in (
+                ("raw_days", raw_days), ("log_days", log_days),
+                ("task_days", task_days), ("edge_days", edge_days),
+            ) if v >= 0
+        }
+        plan = plan_cleanup(ctx, **overrides)
+
+        console.print(_kv_table("本次将处理（按优先级）", {
+            "① 归档正文": (
+                f"删 {plan.raw_files} 个文件，释放 {plan.raw_bytes/1048576:.2f} MB"
+                f"（涉及 {len(plan.raw_dirs)} 个日期目录，元数据保留）"
+            ),
+            "② 日志": ", ".join(f"{k} {v} 行" for k, v in plan.log_rows.items()) or "无",
+            "③ 点赞边": (
+                f"标记陈旧 {plan.unconfirmed_edges} 条（不删除）"
+                f"（已有陈旧 {plan.stale_edges} 条）"
+            ),
+            "④ 已完成任务": f"删 {plan.task_rows} 行",
+        }))
+
+        if not (plan.raw_rows or plan.log_rows or plan.unconfirmed_edges or plan.task_rows):
+            console.print("[green]没有需要清理的内容[/]")
+            return
+
+        if dry_run:
+            console.print("\n[yellow]这是预览，什么都没动。确认要执行就加 --apply[/]")
+            return
+
+        if not force and not typer.confirm("确认执行清理？归档正文删了就回不来（元数据保留）"):
+            raise typer.Exit(code=1)
+
+        result = run_cleanup(ctx, plan, dry_run=False)
+        console.print(_kv_table("清理结果", {
+            "删除文件": f"{result['files_deleted']} 个",
+            "释放空间": f"{result['bytes_freed']/1048576:.2f} MB",
+            "标记已清正文": f"{result['raw_marked']} 条",
+            "删除日志": ", ".join(f"{k} {v}" for k, v in result["logs_deleted"].items()) or "无",
+            "标记陈旧点赞边": f"{result['edges_marked']} 条",
+            "删除已完成任务": f"{result['tasks_deleted']} 行",
+        }))
+        for e in result["errors"][:5]:
+            console.print(f"[red]  出错：{e}[/]")
+        ctx.db.log_event("info", "cleanup", f"清理完成：释放 {result['bytes_freed']} 字节")
+
+
 @app.command()
 def cache(action: str = typer.Argument("stats", help="stats|purge")) -> None:
     """去重缓存操作。命中去重能省掉一大半请求量。"""
