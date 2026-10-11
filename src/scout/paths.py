@@ -105,15 +105,22 @@ class Paths:
         data_dir: str | Path | None = None,
         account: str | None = None,
     ) -> "Paths":
-        root_p = Path(root).resolve() if root else find_project_root()
-        base = Path(data_dir).resolve() if data_dir else (root_p / "data")
+        # 桌面版会用 SCOUT_ROOT / SCOUT_DATA_DIR 指到用户可写目录。
+        # 打包成 exe 后程序目录可能只读，而且用户数据绝不该和程序放一起
+        # （否则卸载程序 = 丢数据，重装 = 覆盖用户配置）。
+        root_p = Path(root).resolve() if root else Path(
+            os.environ.get("SCOUT_ROOT") or find_project_root()
+        ).resolve()
+        base = Path(data_dir).resolve() if data_dir else Path(
+            os.environ.get("SCOUT_DATA_DIR") or (root_p / "data")
+        ).resolve()
         # 优先用环境变量：Web 服务是子进程，靠它把账号传进去
         acct = validate_account(
             account or os.environ.get("SCOUT_ACCOUNT") or _current_account
         )
         accounts_dir = base / ACCOUNTS_SUBDIR
         data_p = accounts_dir / acct
-        config_dir = root_p / "config"
+        config_dir = cls._resolve_config_dir(root_p)
         return cls(
             root=root_p,
             config_dir=config_dir,
@@ -131,6 +138,41 @@ class Paths:
         )
 
     # ── 账号管理 ────────────────────────────────────────────
+
+    @staticmethod
+    def _resolve_config_dir(root_p: Path) -> Path:
+        """配置文件目录放哪。
+
+        按优先级找，第一个存在 `default.yaml` 的胜出：
+
+        1. `SCOUT_CONFIG_DIR` 环境变量
+        2. **打包后程序自带的 config**（PyInstaller 解到 `sys._MEIPASS`）
+        3. 数据/项目根下的 `config/`
+        4. 项目根下的 `config/`
+
+        第 2 条是给桌面版用的：打包后用户的数据目录里没有 config，
+        `default.yaml` 必须从程序包里读。
+        """
+        import sys as _sys
+
+        env = os.environ.get("SCOUT_CONFIG_DIR")
+        if env:
+            return Path(env).resolve()
+
+        cands: list[Path] = []
+        meipass = getattr(_sys, "_MEIPASS", None)
+        if meipass:
+            cands.append(Path(meipass) / "config")
+        cands.append(root_p / "config")
+        try:
+            cands.append(find_project_root() / "config")
+        except Exception:
+            pass
+
+        for c in cands:
+            if (c / "default.yaml").is_file():
+                return c
+        return cands[-1] if cands else (root_p / "config")
 
     def list_accounts(self) -> list[str]:
         """已存在的账号槽位（有数据目录的）。"""

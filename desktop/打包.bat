@@ -18,15 +18,19 @@ echo   [1/3] 安装打包工具...
 .venv\Scripts\python.exe -m pip install --quiet pyinstaller -i https://pypi.tuna.tsinghua.edu.cn/simple
 
 echo   [2/3] 打包（首次约 3-6 分钟）...
-REM --add-data 把前端页面和本地助手包带进去，否则运行时找不到。
+REM --add-data 把前端页面带进去，否则运行时找不到。
 REM --collect-all 收齐 playwright / webview 的隐式依赖，漏了会在别人机器上崩。
+REM
+REM ⚠️ **绝对不能把 config 整个打包进去** ——
+REM 那会把开发者的 llm.local.yaml（含 API Key）一起分发出去。
+REM 用户的 Key 存在自己的用户目录里（见 desktop/app.py 的 _data_root）。
 .venv\Scripts\python.exe -m PyInstaller ^
     --noconfirm ^
     --clean ^
     --name douyin-scout ^
     --onefile ^
     --add-data "src/scout/web/static;scout/web/static" ^
-    --add-data "config;config" ^
+    --add-data "config/default.yaml;config" ^
     --collect-all webview ^
     --collect-all playwright ^
     --hidden-import uvicorn.logging ^

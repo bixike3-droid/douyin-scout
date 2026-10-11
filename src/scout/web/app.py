@@ -1,4 +1,4 @@
-﻿"""本地网页面板。
+"""本地网页面板。
 
 定位：**只读观测台**。看数据、看配额、看熔断、看请求日志，不在这里改配置、
 也不在这里启动采集——那种事走 CLI，避免浏览器里误触就发出一堆请求。
@@ -603,6 +603,89 @@ def create_app() -> FastAPI:
             "agent_port": 18923,
             "agent_download": "/static/scout-agent.zip",
         })
+
+    # ── DeepSeek API Key（用户自己的）────────────────────────
+    #
+    # **绝不能预置开发者的 Key。**
+    # 桌面版会把程序分发出去，如果 Key 打在里面：
+    #   1. 所有人的 AI 消费都算在开发者头上
+    #   2. Key 等于公开了
+    # 所以做成"用户自己填自己的"。
+
+    @app.get("/api/llm/key")
+    def api_llm_key_get() -> JSONResponse:
+        """当前 Key 的配置状态。**只返回打码后的**，不返回明文。"""
+        from ..app import AppContext
+
+        ctx = AppContext.create(migrate_db=False)
+        try:
+            cfg = ctx.config.llm
+            key = cfg.api_key or ""
+            return JSONResponse({
+                "configured": bool(key),
+                "masked": (key[:6] + "…" + key[-4:]) if len(key) > 12 else ("已设置" if key else ""),
+                "model": cfg.model,
+                "base_url": cfg.base_url,
+                "config_file": str(ctx.paths.config_dir / "llm.local.yaml"),
+            })
+        finally:
+            ctx.close()
+
+    @app.post("/api/llm/key")
+    async def api_llm_key_set(payload: dict) -> JSONResponse:
+        """保存用户填的 Key，并**当场验证一次**。
+
+        验证很重要：Key 打错了要等到第一次分析才报错的话，
+        用户根本不知道是自己填错了还是程序坏了。
+        """
+        import yaml
+
+        from ..app import AppContext
+
+        key = str(payload.get("api_key") or "").strip()
+        model = str(payload.get("model") or "deepseek-chat").strip()
+        if not key:
+            return JSONResponse({"ok": False, "error": "Key 不能为空"}, status_code=400)
+        if not key.startswith("sk-"):
+            return JSONResponse(
+                {"ok": False, "error": "DeepSeek 的 Key 应该以 sk- 开头"}, status_code=400
+            )
+
+        ctx = AppContext.create(migrate_db=False)
+        try:
+            target = ctx.paths.config_dir / "llm.local.yaml"
+            data = {}
+            if target.is_file():
+                try:
+                    data = yaml.safe_load(target.read_text(encoding="utf-8")) or {}
+                except Exception:
+                    data = {}
+            llm = data.get("llm") or {}
+            llm.update({"provider": "deepseek", "api_key": key, "model": model})
+            data["llm"] = llm
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False), encoding="utf-8"
+            )
+
+            # 当场验证
+            from ..llm import DeepSeekClient, LLMError
+
+            probe_cfg = type(ctx.config.llm)(**{**ctx.config.llm.__dict__, "api_key": key})
+            try:
+                result = await DeepSeekClient(probe_cfg).ping()
+                return JSONResponse({
+                    "ok": True, "verified": True,
+                    "model": result.get("model", model),
+                    "message": f"已保存，验证通过（{result.get('model', model)}）",
+                })
+            except LLMError as exc:
+                return JSONResponse({
+                    "ok": True, "verified": False,
+                    "message": f"已保存，但验证失败：{exc}",
+                })
+        finally:
+            ctx.close()
 
     # ── 概览：空数据时也要能看、能懂、能上手 ─────────────────
 

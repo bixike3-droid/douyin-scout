@@ -36,6 +36,36 @@ def _here() -> Path:
     return Path(__file__).resolve().parent
 
 
+def _data_root() -> Path:
+    """用户数据放哪。
+
+    **不能放在程序目录里**，原因有两个：
+      1. 打包成 exe 后，程序目录可能在 Program Files 下，是只读的
+      2. 用户的 API Key 和数据**绝不能**跟着程序一起分发
+
+    策略：优先用 exe 旁边的目录（绿色软件风格，卸载就是删文件夹）；
+    那里不可写就退回系统用户目录。
+    """
+    import tempfile
+
+    beside = _here() / "userdata"
+    try:
+        beside.mkdir(parents=True, exist_ok=True)
+        probe = beside / ".writable"
+        probe.write_text("1", encoding="utf-8")
+        probe.unlink()
+        return beside
+    except OSError:
+        pass
+
+    base = os.environ.get("APPDATA") or os.environ.get("XDG_CONFIG_HOME") or str(
+        Path.home() / ".config"
+    )
+    fallback = Path(base) / "douyin-scout"
+    fallback.mkdir(parents=True, exist_ok=True)
+    return fallback
+
+
 def _pick_port() -> int:
     """让系统分配一个空闲端口。写死端口会和别的软件撞。"""
     with socket.socket() as s:
@@ -72,14 +102,18 @@ def _serve(port: int, ready: threading.Event) -> None:
 
 
 def main() -> None:
-    # 桌面版默认用 main 账号目录：这是用户自己机器上的唯一账号。
-    # 服务器上那套多账号隔离（--account）在这里没有意义 ——
-    # 一台机器一个用户。
+    # 桌面版用 main 账号目录：一台机器一个用户，服务器那套多账号隔离在这里没意义
     os.environ.setdefault("SCOUT_ACCOUNT", "main")
+    # **数据目录指向用户可写位置**，而不是程序目录 ——
+    # 否则打包后写不进去，而且用户的 Key 会跟程序一起被分发
+    root = _data_root()
+    os.environ["SCOUT_ROOT"] = str(root)
+    os.environ["SCOUT_DATA_DIR"] = str(root / "data")
 
     print("=" * 58)
     print("  douyin-scout")
     print("=" * 58)
+    print(f"  数据目录：{root}")
     print()
 
     try:
