@@ -25,3 +25,9 @@ cm.txt
 c2.txt
 
 c3.txt
+
+build/
+dist/
+*.spec
+desktop/build/
+desktop/dist/
