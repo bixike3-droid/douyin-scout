@@ -31,3 +31,6 @@ dist/
 *.spec
 desktop/build/
 desktop/dist/
+
+desktop/userdata/
+userdata/

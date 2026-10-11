@@ -101,6 +101,31 @@ def _serve(port: int, ready: threading.Event) -> None:
     server.run()
 
 
+def _init_data() -> bool:
+    """确保数据库存在、表结构完整。
+
+    **桌面版必须自己做这件事**，不能让用户去终端跑 `scout init` ——
+    用户不知道什么是终端，看到「请先在终端运行 scout init」只会一脸懵。
+
+    这里跑一次迁移（幂等，重复运行无副作用）。
+    """
+    try:
+        from scout.app import AppContext
+
+        ctx = AppContext.create(migrate_db=True)
+        try:
+            n = ctx.db.scalar(
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table'", default=0
+            )
+            print(f"  数据库就绪（{n} 张表）")
+        finally:
+            ctx.close()
+        return True
+    except Exception as exc:
+        print(f"  ⚠ 数据库初始化失败：{type(exc).__name__}: {exc}")
+        return False
+
+
 def main() -> None:
     # 桌面版用 main 账号目录：一台机器一个用户，服务器那套多账号隔离在这里没意义
     os.environ.setdefault("SCOUT_ACCOUNT", "main")
@@ -115,6 +140,9 @@ def main() -> None:
     print("=" * 58)
     print(f"  数据目录：{root}")
     print()
+
+    print("  正在初始化…")
+    _init_data()
 
     try:
         import webview  # noqa: F401
