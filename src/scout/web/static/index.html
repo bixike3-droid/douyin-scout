@@ -131,6 +131,8 @@
     </div>
     <div id="dataCards" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:22px"></div>
 
+    <div id="llmSetup" style="margin-bottom:22px"></div>
+
     <div class="row" style="margin-bottom:10px">
       <b>上手步骤</b>
       <span class="dim">从「下一步」开始做就行</span>
@@ -879,6 +881,7 @@ async function loadHome(){
     return;
   }
   sysCache = s;
+  await renderLlmSetup(false);
   const c = s.counts || {}, t = s.tasks || {}, lg = s.login || {}, lm = s.llm || {};
 
   // 系统就绪状态：三个灯
@@ -947,6 +950,80 @@ function gotoStep(action, kinds){
 }
 
 $('#sysRefresh').onclick = ()=>{ loadHome(); loadCollect(); };
+
+// ── DeepSeek API Key（用户自己的）─────────────────────────
+// 为什么必须让用户自己填：桌面版会把程序分发出去，
+// 开发者的 Key 打在里面 = 所有人花他的钱 + Key 等于公开。
+async function renderLlmSetup(force){
+  const box = $('#llmSetup');
+  if (!box) return;
+  let st = {};
+  try { st = await get('/api/llm/key'); } catch(e) { st = {}; }
+
+  if (st.configured && !force) {
+    box.innerHTML = `<div class="card" style="border-color:var(--ok)">
+      <div class="row" style="align-items:center">
+        <span class="lamp" style="background:var(--ok)"></span>
+        <b>AI 大模型已就绪</b>
+        <span class="dim">${esc(st.model)}　密钥 ${esc(st.masked)}</span>
+        <span style="margin-left:auto"></span>
+        <button class="mini" onclick="renderLlmSetup(true)">更换密钥</button>
+      </div>
+      <div class="s" style="margin-top:8px">
+        用的是你自己的 DeepSeek 密钥，AI 分析的费用由你的账号承担。
+      </div>
+    </div>`;
+    return;
+  }
+
+  box.innerHTML = `<div class="card" style="border-color:var(--accent)">
+    <b>先配置 AI 大模型</b>
+    <div class="s" style="margin-top:8px;white-space:normal">
+      受众画像、作品评价、下一步计划都由大模型生成，需要你自己的
+      DeepSeek API 密钥。<br>
+      还没有的话去 <a href="https://platform.deepseek.com/api_keys"
+                       target="_blank" rel="noopener">platform.deepseek.com</a> 申请
+      （新账号通常有免费额度）。
+    </div>
+    <div class="row" style="margin-top:12px">
+      <input id="llmKeyInput" type="password" placeholder="sk-..."
+             style="flex:1;min-width:280px;background:var(--panel2);color:var(--fg);
+                    border:1px solid var(--line);border-radius:8px;padding:8px 11px">
+      <button class="mini" id="llmKeySave">保存并验证</button>
+      ${st.configured ? '<button class="mini" id="llmKeyCancel">取消</button>' : ''}
+    </div>
+    <div class="s" id="llmKeyMsg" style="margin-top:9px;white-space:normal"></div>
+    <div class="s" style="margin-top:9px;color:var(--dim);white-space:normal">
+      密钥只存在你这台机器上（${esc(st.config_file || '配置文件')}），不会上传到任何服务器。
+    </div>
+  </div>`;
+
+  const save = $('#llmKeySave');
+  if (save) save.onclick = async ()=>{
+    const key = $('#llmKeyInput').value.trim();
+    const msg = $('#llmKeyMsg');
+    if (!key) { msg.textContent = '请先填入密钥'; msg.style.color = 'var(--warn)'; return; }
+    msg.textContent = '正在保存并验证…'; msg.style.color = 'var(--dim)';
+    save.disabled = true;
+    try {
+      const r = await fetch('/api/llm/key', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({ api_key: key }),
+      });
+      const d = await r.json();
+      if (!d.ok) { msg.textContent = d.error || '保存失败'; msg.style.color = 'var(--bad)'; save.disabled = false; return; }
+      msg.textContent = d.message || '已保存';
+      msg.style.color = d.verified ? 'var(--ok)' : 'var(--warn)';
+      if (d.verified) { setTimeout(()=>{ renderLlmSetup(false); loadHome(); }, 900); }
+      else { save.disabled = false; }
+    } catch(e) {
+      msg.textContent = '保存失败：' + e.message; msg.style.color = 'var(--bad)';
+      save.disabled = false;
+    }
+  };
+  const cancel = $('#llmKeyCancel');
+  if (cancel) cancel.onclick = ()=>renderLlmSetup(false);
+}
 
 async function loadAI(){
   await loadCreator();
