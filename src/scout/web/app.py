@@ -529,6 +529,75 @@ def create_app() -> FastAPI:
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
+    # ── 本地助手上传登录态 ──────────────────────────────────
+    #
+    # 用户在网页点「登录我的抖音」→ 本地助手在自己电脑上开浏览器扫码
+    # → 把 storage_state 直接 POST 到这里（不经过网页 JS）。
+    #
+    # 为什么必须这样：抖音的登录凭据全是 HttpOnly 的（sessionid / sid_tt /
+    # odin_tt …），网页 JS 读不到；而让服务器去登录会撞验证码墙。
+
+    @app.post("/api/agent/cookie")
+    async def api_agent_cookie(payload: dict) -> JSONResponse:
+        from ..paths import Paths, validate_account
+
+        user_id = str(payload.get("user_id") or "").strip()
+        state = payload.get("storage_state") or {}
+        nickname = str(payload.get("nickname") or "")[:60]
+        sec_uid = str(payload.get("sec_uid") or "")[:200]
+
+        if not user_id or not isinstance(state, dict) or not state.get("cookies"):
+            return JSONResponse(
+                {"ok": False, "error": "缺少 user_id 或 storage_state"},
+                status_code=400,
+            )
+
+        # **路径安全**：user_id 会变成目录名，必须挡掉 ../ 之类的输入
+        account = f"u_{user_id}"
+        try:
+            validate_account(account)
+        except ValueError as exc:
+            return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+
+        # 用户数据完全隔离：自己的账号目录、自己的数据库
+        paths = Paths.build(account=account).ensure()
+        (paths.state_dir / "tier_a_storage.json").write_text(
+            json.dumps(state, ensure_ascii=False), encoding="utf-8"
+        )
+
+        from ..app import AppContext
+
+        ctx = AppContext.create(migrate_db=True)
+        try:
+            if sec_uid:
+                ctx.cursors.set("self_sec_uid", sec_uid)
+            if nickname and sec_uid:
+                ctx.users.upsert({"sec_uid": sec_uid, "nickname": nickname})
+            ctx.db.log_event(
+                "info", "agent",
+                f"本地助手接入：{nickname or '(未知名)'} 账号目录={account} "
+                f"cookie={len(state.get('cookies') or [])} 个",
+            )
+        finally:
+            ctx.close()
+
+        return JSONResponse({
+            "ok": True,
+            "account": account,
+            "nickname": nickname,
+            "cookies": len(state.get("cookies") or []),
+            "message": f"已接入：{nickname or '你的抖音账号'}",
+        })
+
+    @app.get("/api/agent/config")
+    def api_agent_config() -> JSONResponse:
+        """给本地助手和网页用的配置。"""
+        return JSONResponse({
+            "server_url": "http://douyin.baodaoxiaoyuan.cn",
+            "agent_port": 18923,
+            "agent_download": "/static/scout-agent.zip",
+        })
+
     # ── 概览：空数据时也要能看、能懂、能上手 ─────────────────
 
     @app.get("/api/system")

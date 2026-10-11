@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="utf-8">
@@ -140,6 +140,7 @@
 
   <section id="tab-collect">
     <div class="card" id="loginBox" style="margin-bottom:16px">
+      <div id="agentBox" class="card" style="margin-bottom:12px"></div>
       <div class="row" style="align-items:center">
         <b>登录状态</b>
         <span id="loginText" class="dim">读取中…</span>
@@ -514,7 +515,119 @@ $('#cpRunAll').onclick = async ()=>{
   runCreator('plan');
 };
 
-// ── 网页扫码登录 ──────────────────────────────────────────
+// ── 本地助手探测 ─────────────────────────────────────────
+// 助手跑在用户自己的 127.0.0.1:18923 上。登录必须在那里完成：
+// 抖音的登录凭据全是 HttpOnly 的（网页 JS 读不到），
+// 而服务器去登录会撞验证码墙；用户自己电脑上则是真实环境。
+const AGENT_PORT = 18923;
+const AGENT_BASE = 'http://127.0.0.1:' + AGENT_PORT;
+let agentAlive = false;
+let agentTimer = null;
+let loginBusy = false;
+
+function getUserId(){
+  let uid = localStorage.getItem('scout_uid');
+  if (!uid) {
+    uid = Array.from(crypto.getRandomValues(new Uint8Array(16)))
+              .map(b => b.toString(16).padStart(2,'0')).join('');
+    localStorage.setItem('scout_uid', uid);
+  }
+  return uid;
+}
+
+async function pingAgent(){
+  try {
+    const ctl = new AbortController();
+    const t = setTimeout(()=>ctl.abort(), 2500);
+    const r = await fetch(AGENT_BASE + '/ping', {signal: ctl.signal});
+    clearTimeout(t);
+    agentAlive = r.ok;
+  } catch(e) { agentAlive = false; }
+  return agentAlive;
+}
+
+function renderAgentState(){
+  const box = $('#agentBox');
+  if (!box) return;
+  if (agentAlive) {
+    box.innerHTML = '<span class="lamp" style="background:var(--ok)"></span>' +
+      '<b>本地助手已连接</b>' +
+      '<span class="dim">　点下面的按钮，会在你电脑上打开抖音让你扫码</span>';
+    box.style.borderColor = 'var(--ok)';
+  } else {
+    box.innerHTML = '<span class="lamp" style="background:var(--warn)"></span>' +
+      '<b>还没有运行本地助手</b>' +
+      '<div class="s" style="margin-top:6px;white-space:normal">' +
+      '登录要在<b>你自己的电脑</b>上完成 —— 那里是真实用户环境，抖音不会拦。' +
+      '下载后双击运行即可，不用安装、不用懂技术。</div>' +
+      '<div style="margin-top:10px">' +
+      '<a class="mini" href="/static/scout-agent.zip" download ' +
+      'style="display:inline-block;text-decoration:none">下载本地助手</a>' +
+      '<button class="mini" style="margin-left:8px" onclick="checkAgent()">我已运行，重新检测</button>' +
+      '</div></div>';
+    box.style.borderColor = 'var(--warn)';
+  }
+  const btn = $('#loginStart');
+  if (btn) btn.style.display = (agentAlive && !loginBusy) ? '' : 'none';
+}
+
+async function checkAgent(){
+  await pingAgent();
+  renderAgentState();
+}
+
+function pollAgentLogin(){
+  if (agentTimer) { clearInterval(agentTimer); agentTimer = null; }
+  loginBusy = true;
+  renderAgentState();
+  agentTimer = setInterval(async ()=>{
+    try {
+      const r = await fetch(AGENT_BASE + '/status');
+      const s = await r.json();
+      const map = { starting:'正在启动浏览器…', waiting:'等待扫码…',
+                    ok:'登录成功', error:'登录失败', idle:'空闲' };
+      $('#loginMsg').textContent = (map[s.status] || s.status) +
+        (s.nickname ? '　（' + s.nickname + '）' : '') +
+        (s.message && s.status !== 'ok' ? '　' + s.message : '');
+      if (s.status === 'ok' || s.status === 'error') {
+        clearInterval(agentTimer); agentTimer = null; loginBusy = false;
+        renderAgentState();
+        if (s.status === 'ok') {
+          $('#loginText').textContent = '已连接：' + (s.nickname || '你的抖音账号');
+          $('#loginText').style.color = 'var(--ok)';
+          loadHome(); loadCollect();
+        }
+      }
+    } catch(e) {
+      clearInterval(agentTimer); agentTimer = null; loginBusy = false;
+      $('#loginMsg').textContent = '本地助手断开了 —— 那个黑色窗口是不是被关掉了？';
+      checkAgent();
+    }
+  }, 1500);
+}
+
+$('#loginStart').onclick = async ()=>{
+  $('#loginPanel').style.display = '';
+  $('#loginQr').style.display = 'none';
+  $('#loginMsg').textContent = '正在通知本地助手…';
+  try {
+    const r = await fetch(AGENT_BASE + '/login', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ server_url: location.origin, user_id: getUserId() }),
+    });
+    const d = await r.json();
+    if (!d.ok) { $('#loginMsg').textContent = d.reason || '启动失败'; return; }
+    $('#loginMsg').textContent =
+      '已通知助手 —— 请看你电脑上弹出的浏览器窗口，用抖音 App 扫码。';
+    pollAgentLogin();
+  } catch(e) {
+    alert('连不上本地助手。确认那个黑色窗口还开着，然后点「我已运行，重新检测」。');
+    checkAgent();
+  }
+};
+
+// ── 服务器侧扫码登录（抖音反爬挡住，留作备用）────────────
 let loginES = null;
 
 const LOGIN_STATE_TEXT = {
@@ -524,6 +637,7 @@ const LOGIN_STATE_TEXT = {
 };
 
 async function loadLogin(){
+  await checkAgent();
   let s = {}, acct = {};
   try { s = await get('/api/login/status'); } catch(e) { s = {status:'idle'}; }
   try { acct = await get('/api/account'); } catch(e) {}
