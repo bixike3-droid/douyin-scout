@@ -1,4 +1,4 @@
-"""本地网页面板。
+﻿"""本地网页面板。
 
 定位：**只读观测台**。看数据、看配额、看熔断、看请求日志，不在这里改配置、
 也不在这里启动采集——那种事走 CLI，避免浏览器里误触就发出一堆请求。
@@ -40,6 +40,12 @@ class _ReadOnly:
 
 def create_app() -> FastAPI:
     app = FastAPI(title="douyin-scout", docs_url="/api/docs", redoc_url=None)
+
+    # 静态资源（本地助手安装包等）。
+    # 首页是手写的 / 路由，但 .zip 这类文件必须靠挂载才能下载 ——
+    # 不挂载会 404，而且从 404 页面看不出是'路由没注册'，容易误判成文件丢了。
+    from fastapi.staticfiles import StaticFiles
+    app.mount('/static', StaticFiles(directory=str(STATIC_DIR)), name='static')
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> HTMLResponse:
