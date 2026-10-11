@@ -1,4 +1,4 @@
-@echo off
+﻿@echo off
 chcp 65001 >nul
 cd /d "%~dp0\.."
 
@@ -31,6 +31,7 @@ REM 用户的 Key 存在自己的用户目录里（见 desktop/app.py 的 _data_
     --onefile ^
     --add-data "src/scout/web/static;scout/web/static" ^
     --add-data "config/default.yaml;config" ^
+    --add-data "src/scout/db/migrations;scout/db/migrations" ^
     --collect-all webview ^
     --collect-all playwright ^
     --hidden-import uvicorn.logging ^

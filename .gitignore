@@ -34,3 +34,6 @@ desktop/dist/
 
 desktop/userdata/
 userdata/
+
+build*.log
+
