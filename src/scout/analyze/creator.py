@@ -21,9 +21,10 @@ from typing import Any
 from ..app import AppContext
 from ..llm import DeepSeekClient, LLMError
 from ..util import sha256_bytes
-from .ai import TASK_PROFILE, AnalysisResult, _parse_json
+from .ai import TASK_PROFILE, AnalysisResult, _parse_json, PROMPT_VERSION as PROFILE_VERSION
+from ..store.collection import Quality, clean_metrics
 
-PROMPT_VERSION = "v1"
+PROMPT_VERSION = "v2-quality"
 TASK_REVIEW = "review"
 TASK_PLAN = "plan"
 
@@ -75,11 +76,11 @@ SYSTEM_PLAN = """你是一名短视频内容策划。你会拿到对一个创作
 def _fan_buckets(ctx: AppContext) -> dict[str, int]:
     rows = ctx.db.query(
         """SELECT u.follower_count FROM users u
-           WHERE u.sec_uid IN (SELECT sec_uid FROM like_edges)"""
+           WHERE u.sec_uid IN (SELECT sec_uid FROM v_valid_interactions)"""
     )
     buckets = {"<100": 0, "100-1k": 0, "1k-1w": 0, "1w-10w": 0, ">=10w": 0, "未知": 0}
     for r in rows:
-        n = r["follower_count"]
+        n = clean_metrics(dict(r))["follower_count"]
         if n is None:
             buckets["未知"] += 1
         elif n < 100:
@@ -98,7 +99,10 @@ def _fan_buckets(ctx: AppContext) -> dict[str, int]:
 def _liker_profiles(ctx: AppContext) -> list[dict[str, Any]]:
     """已生成的点赞人画像。"""
     out = []
+    eligible = {r["sec_uid"] for r in Quality(ctx.db).audience()}
     for r in ctx.llm_results.all_latest(TASK_PROFILE):
+        if r["subject_id"] not in eligible or r["prompt_version"] != PROFILE_VERSION:
+            continue
         try:
             data = json.loads(r["output_json"] or "{}")
         except Exception:
@@ -106,6 +110,13 @@ def _liker_profiles(ctx: AppContext) -> list[dict[str, Any]]:
         out.append({"sec_uid": r["subject_id"], "data": data,
                     "summary": r.get("input_summary", "")})
     return out
+
+
+def _score(data):
+    value = data.get("relevance_score")
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 5:
+        return value
+    return None
 
 
 def build_review_input(ctx: AppContext) -> tuple[str, str, str]:
@@ -139,7 +150,7 @@ def build_review_input(ctx: AppContext) -> tuple[str, str, str]:
 
     likers = ctx.db.rows_as_dicts(
         """SELECT u.nickname, u.follower_count, u.signature, u.douyin_id
-           FROM users u WHERE u.sec_uid IN (SELECT sec_uid FROM like_edges)"""
+           FROM users u WHERE u.sec_uid IN (SELECT sec_uid FROM v_valid_interactions)"""
     )
     lines.append("")
     lines.append(f"【点赞人概况】共 {len(likers)} 人")
@@ -171,12 +182,12 @@ def build_review_input(ctx: AppContext) -> tuple[str, str, str]:
             "与我的相关性评分分布："
             + "，".join(f"{k}分 {v}人" for k, v in sorted(scores.items(), reverse=True))
         )
-        high = [p for p in profiles if int(p["data"].get("relevance_score") or 0) >= 4]
+        high = [p for p in profiles if (_score(p["data"]) or 0) >= 4]
         if high:
             lines.append(f"高相关点赞人（4-5分）{len(high)} 人，样本：")
             for p in high[:6]:
                 lines.append(f"  - {p['summary']}：{p['data'].get('persona', '')}")
-        low = [p for p in profiles if int(p["data"].get("relevance_score") or 0) <= 2]
+        low = [p for p in profiles if _score(p["data"]) is not None and _score(p["data"]) <= 2]
         if low:
             lines.append(f"低相关点赞人（1-2分）{len(low)} 人 —— 说明作品可能触达了非目标人群")
     else:
@@ -184,14 +195,15 @@ def build_review_input(ctx: AppContext) -> tuple[str, str, str]:
         lines.append("【点赞人画像统计】（尚未生成，请只基于作品数据分析）")
 
     text = "\n".join(lines)
-    digest = sha256_bytes(text.encode("utf-8"))[:32]
+    digest = sha256_bytes((text + "\nmodel:" + ctx.config.llm.model).encode("utf-8"))[:32]
     summary = f"作品评价：{len(mine)} 个作品、{len(likers)} 个点赞人"
     return text, digest, summary
 
 
 def build_plan_input(ctx: AppContext, review_text: str) -> tuple[str, str, str]:
     """计划必须建立在评价结论之上，不是又一次空谈。"""
-    review = ctx.llm_results.latest("self", "me", TASK_REVIEW)
+    review = ctx.llm_results.find("self", "me", TASK_REVIEW, PROMPT_VERSION,
+                                  sha256_bytes((review_text + "\nmodel:" + ctx.config.llm.model).encode("utf-8"))[:32])
     lines = []
     if review:
         try:
@@ -215,7 +227,7 @@ def build_plan_input(ctx: AppContext, review_text: str) -> tuple[str, str, str]:
     lines.append("粉丝量级分布：" + "，".join(f"{k} {v}人" for k, v in buckets.items() if v))
 
     text = "\n".join(lines)
-    digest = sha256_bytes(text.encode("utf-8"))[:32]
+    digest = sha256_bytes((text + "\nmodel:" + ctx.config.llm.model).encode("utf-8"))[:32]
     summary = "下一步计划"
     return text, digest, summary
 

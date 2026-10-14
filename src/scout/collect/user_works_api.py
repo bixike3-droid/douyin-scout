@@ -30,7 +30,22 @@ class UserWorksApiCollector(ApiCollector):
         return max(1, int(self.ctx.config.targets.works_max_pages))
 
     def _page_size(self) -> int:
-        return max(1, min(50, int(self.ctx.config.targets.works_page_size)))
+        size = max(1, min(50, int(self.ctx.config.targets.works_page_size)))
+        remaining = getattr(self, "_remaining", 0)
+        return min(size, remaining) if remaining else size
+
+    def max_items(self, task):
+        if task.get("target") == self.ctx.cursors.get("self_sec_uid"):
+            return 0
+        return max(0, int(task.get("_item_limit", self.ctx.config.targets.works_per_user_limit)))
+
+    def filter_parsed(self, parsed, task):
+        target = task.get("target")
+        original = len(parsed.works)
+        parsed.works = [w for w in parsed.works if w.get("author_sec_uid") == target]
+        if len(parsed.works) != original:
+            parsed.notes.append(f"跳过 {original-len(parsed.works)} 条作者归属未确认的作品")
+        return parsed
 
     def api_url(self, target: str, cursor: int) -> str:
         return (
@@ -57,18 +72,20 @@ class UserWorksApiCollector(ApiCollector):
             aweme_id = work.get("aweme_id")
             if not aweme_id:
                 continue
-            ctx.works.upsert(work, raw_blob_id=raw_id)
             author = work.get("author_sec_uid") or ""
-            if sec_uid and author and author != sec_uid:
+            if sec_uid and author != sec_uid:
                 skipped += 1
                 continue
+            ctx.works.upsert(work, raw_blob_id=raw_id)
             linked.append(aweme_id)
 
         if linked:
             ctx.works.link_listings(sec_uid, linked, raw_blob_id=raw_id)
             ctx.users.mark_state(sec_uid, "ok", tier="a")
+            if sec_uid == ctx.cursors.get("self_sec_uid"):
+                ctx.works.mark_mine_by_author(sec_uid)
 
-        out = {"works_saved": len(parsed.works), "works_linked": len(linked)}
+        out = {"works_saved": len(linked), "works_linked": len(linked)}
         if skipped:
             out["skipped_other_author"] = skipped
         return out

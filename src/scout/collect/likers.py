@@ -63,7 +63,7 @@ class LikersCollector(ApiCollector):
                 ctx.snapshots.record(user["sec_uid"], user)
                 saved += 1
 
-        added = ctx.like_edges.add_many(parsed.like_edges, tier="b", raw_blob_id=raw_id)
+        added = ctx.like_edges.add_many(parsed.like_edges, tier=task.get("tier") or "a", raw_blob_id=raw_id)
 
         # **这次拿到的是完整名单，所以名单里的人都被"再次确认"了。**
         # 更新 last_confirmed_at，陈旧判断靠它。
@@ -83,6 +83,6 @@ class LikersCollector(ApiCollector):
         for user in parsed.users:
             sec_uid = user.get("sec_uid")
             if sec_uid and user.get("follower_count") is not None:
-                ctx.users.mark_state(sec_uid, "ok", tier="b")
+                ctx.users.mark_state(sec_uid, "ok", tier=task.get("tier") or "a")
 
         return {"users_saved": saved, "new_edges": added, "confirmed": len(parsed.like_edges)}

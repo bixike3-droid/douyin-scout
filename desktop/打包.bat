@@ -1,62 +1,46 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 cd /d "%~dp0\.."
 
-echo.
-echo ============================================================
-echo   打包成独立 exe（双击即用，用户不需要装 Python）
-echo ============================================================
-echo.
-
 if not exist ".venv\Scripts\python.exe" (
-    echo   先运行一次 启动.bat 把环境准备好。
+    echo 请先运行 desktop\启动.bat 准备环境。
     pause
     exit /b 1
 )
 
-echo   [1/3] 安装打包工具...
-.venv\Scripts\python.exe -m pip install --quiet pyinstaller -i https://pypi.tuna.tsinghua.edu.cn/simple
+echo [1/2] 准备桌面依赖与打包工具...
+.venv\Scripts\python.exe -m pip install -e ".[desktop]" pyinstaller -i https://pypi.tuna.tsinghua.edu.cn/simple
+if errorlevel 1 (
+    echo 依赖安装失败。
+    pause
+    exit /b 1
+)
 
-echo   [2/3] 打包（首次约 3-6 分钟）...
-REM --add-data 把前端页面带进去，否则运行时找不到。
-REM --collect-all 收齐 playwright / webview 的隐式依赖，漏了会在别人机器上崩。
-REM
-REM ⚠️ **绝对不能把 config 整个打包进去** ——
-REM 那会把开发者的 llm.local.yaml（含 API Key）一起分发出去。
-REM 用户的 Key 存在自己的用户目录里（见 desktop/app.py 的 _data_root）。
+echo [2/2] 打包原生桌面程序...
+REM 只携带默认配置与数据库迁移，用户配置由程序保存在 userdata。
 .venv\Scripts\python.exe -m PyInstaller ^
     --noconfirm ^
     --clean ^
-    --name douyin-scout ^
+    --name 源镜 ^
+    --distpath dist/yuanjing ^
     --onefile ^
-    --add-data "src/scout/web/static;scout/web/static" ^
+    --windowed ^
+    --icon "src/scout/desktop/assets/yuanjing.ico" ^
     --add-data "config/default.yaml;config" ^
+    --add-data "src/scout/desktop/assets;scout/desktop/assets" ^
     --add-data "src/scout/db/migrations;scout/db/migrations" ^
-    --collect-all webview ^
     --collect-all playwright ^
-    --hidden-import uvicorn.logging ^
-    --hidden-import uvicorn.loops.auto ^
-    --hidden-import uvicorn.protocols.http.auto ^
-    --hidden-import uvicorn.protocols.websockets.auto ^
-    --hidden-import uvicorn.lifespan.on ^
+    --exclude-module PySide6.QtWebEngineCore ^
+    --exclude-module PySide6.QtWebEngineWidgets ^
+    --exclude-module PySide6.QtWebEngineQuick ^
     desktop\app.py
-
-if not %errorlevel%==0 (
-    echo.
-    echo   打包失败，看上面的错误。
+if errorlevel 1 (
+    echo 打包失败，请查看上面的错误。
     pause
     exit /b 1
 )
 
-echo.
-echo   [3/3] 完成
-echo.
-echo   exe 在： dist\douyin-scout.exe
-echo.
-echo   注意：这个 exe 还需要两样东西才能跑：
-echo     1. 同目录下的 config 文件夹（含 default.yaml 和你的 llm.local.yaml）
-echo     2. Playwright 的浏览器（首次运行会自动下载）
-echo.
-echo   要分发给别人，把 dist\douyin-scout.exe 和 config 一起打包。
-echo.
+echo 完成：dist\yuanjing\源镜.exe
+echo 分发程序即可，用户数据和设置将在首次运行时建立。
+echo 默认进入源镜传播工作台，保留抖音登录、采集及历史分析。
 pause

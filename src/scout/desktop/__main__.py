@@ -1,0 +1,67 @@
+"""Run with python -m scout.desktop or desktop/app.py."""
+from __future__ import annotations
+
+import argparse
+import logging
+import os
+import sys
+from pathlib import Path
+
+
+def main(default_root: Path | None = None) -> int:
+    parser = argparse.ArgumentParser(description="源镜原生桌面程序")
+    parser.add_argument("--data-dir", type=Path, help="独立的用户数据根目录")
+    parser.add_argument("--dev-mode", action="store_true", help="源码开发预览，安全状态下自动重载")
+    args = parser.parse_args()
+    try:
+        from PySide6.QtWidgets import QApplication, QMessageBox
+    except ImportError as exc:
+        error_root = args.data_dir or Path(os.environ.get("LOCALAPPDATA") or Path.home()) / "douyin-scout"
+        error_root.mkdir(parents=True, exist_ok=True)
+        error_file = error_root / "desktop-startup.log"
+        error_file.write_text(str(exc), encoding="utf-8")
+        message = f"桌面组件加载失败，请重新安装或重新下载程序。\n诊断文件：{error_file}"
+        if sys.platform == "win32":
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(None, message, "启动失败", 0x10)
+        elif sys.stderr is not None:
+            print(message, file=sys.stderr)
+        return 1
+    app = QApplication(sys.argv[:1])
+    if sys.platform == "win32":
+        from PySide6.QtGui import QFont
+        app.setFont(QFont("Microsoft YaHei UI", 10))
+    app.setApplicationName("源镜")
+    app.setApplicationDisplayName("源镜")
+    app.setOrganizationName("源镜")
+    try:
+        from .runtime import prepare_runtime
+        from .service import DesktopService
+        from .window import MainWindow
+
+        if getattr(sys, "frozen", False):
+            default_root = Path(sys.executable).resolve().parent / "userdata"
+        root = args.data_dir or default_root
+        try:
+            paths = prepare_runtime(root)
+        except OSError:
+            if args.data_dir is not None:
+                raise
+            paths = prepare_runtime()
+        log_dir = paths.root / "logs"
+        log_dir.mkdir(exist_ok=True)
+        logging.basicConfig(filename=log_dir / "desktop.log", encoding="utf-8", level=logging.INFO)
+        window = MainWindow(DesktopService(paths))
+        if args.dev_mode and not getattr(sys, "frozen", False):
+            from .dev import DevReload
+            window.dev_reload = DevReload(window, Path(__file__).resolve().parents[3])
+        window.show()
+        return app.exec()
+    except Exception as exc:
+        logging.exception("Desktop startup failed")
+        QMessageBox.critical(None, "启动失败", f"无法启动程序：{exc}")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

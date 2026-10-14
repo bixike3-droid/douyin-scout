@@ -141,6 +141,12 @@ storage:
 #
 # 用 `scout probe --url "<主页地址>" --tier a --scroll 2 --dump` 实测校准。
 targets:
+  # 原生快速/深采共用接口节奏，DOM 通知流程保留原档位间隔。
+  api_min_delay_s: 1.5
+  api_max_delay_s: 3.0
+  quick_works_limit: 12
+  works_per_user_limit: 60
+  collection_ttl_hours: 24
   home_url: "https://www.douyin.com"
   notice_url: "https://www.douyin.com/user/self?from_tab_name=main&showTab=post"
   notice_url_candidates:

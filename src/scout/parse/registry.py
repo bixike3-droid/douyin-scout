@@ -278,7 +278,8 @@ def _parse_notice(url: str, payload: Any) -> ParseResult:
         "cursor": str(payload.get("max_time") or ""),
         "min_time": payload.get("min_time"),
         "max_time": payload.get("max_time"),
-        "has_more": bool(payload.get("has_more")),
+        "has_more": extract_cursor(payload)["has_more"],
+        "has_more_known": extract_cursor(payload)["has_more_known"],
         "notice_group": payload.get("notice_group"),
     }
     if not result.like_edges and not result.users:

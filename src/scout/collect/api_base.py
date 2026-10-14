@@ -14,12 +14,16 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import replace
 from typing import Any
 
 from ..guard.circuit import CircuitOpen
 from ..guard.quota import QuotaExceeded
 from ..parse.registry import ParseResult, parse_payload
 from .base import CollectOutcome, Collector
+from ..store.collection import Coverage
+from ..util import iso, utcnow
+from datetime import timedelta
 
 # 抖音 web 端通用查询参数。实测这些够了，多余的设备指纹参数不影响返回。
 COMMON_PARAMS = (
@@ -95,6 +99,19 @@ class ApiCollector(Collector):
                 return nxt
         return None
 
+    def max_items(self, task: dict[str, Any]) -> int:
+        return 0
+
+    def filter_parsed(self, parsed, task):
+        return parsed
+
+    def _identifiers(self, parsed):
+        if self.kind == "fetch_user_works":
+            return {str(w["aweme_id"]) for w in parsed.works if w.get("aweme_id")}
+        if self.kind == "fetch_likers":
+            return {str(e["sec_uid"]) for e in parsed.like_edges if e.get("sec_uid")}
+        return {str(u["sec_uid"]) for u in parsed.users if u.get("sec_uid")}
+
     # ── 主流程 ──────────────────────────────────────────────
 
     async def run(self, task: dict[str, Any]) -> CollectOutcome:
@@ -102,132 +119,161 @@ class ApiCollector(Collector):
         target = str(task.get("target") or "")
         outcome = CollectOutcome(kind=self.kind, tier=tier, target=target)
         started = time.monotonic()
-        self.stats: dict[str, Any] = {"pages": 0, "exhausted": False}
-
+        coverage = Coverage(self.ctx.db)
+        limit = max(0, self.max_items(task))
+        previous = coverage.get(self.kind, target)
+        recent = iso(utcnow() - timedelta(hours=self.ctx.config.targets.collection_ttl_hours))
+        resume = bool(task.get("_resume", False) and previous and previous["state"] in ("partial", "sampled")
+                      and previous["updated_at"] >= recent and previous["hint"] == task.get("_hint", ""))
+        seen = coverage.items(self.kind, target) if resume else set()
+        cursor = int(previous["next_cursor"]) if resume and seen else 0
+        pages, state, clean_status = 0, "partial", False
+        merged = ParseResult(url=target, kind=self.kind)
+        self.stats = {"pages": 0, "exhausted": False}
         try:
             self.ctx.guard(tier)
+            if not resume:
+                coverage.reset_items(self.kind, target)
+            session = await self.ctx.open_session()
+            cfg = self.ctx.tier_cfg(tier)
+            if task.get("_api_cadence"):
+                minimum = max(0.8, self.ctx.config.targets.api_min_delay_s)
+                cfg = replace(cfg, min_delay_s=minimum,
+                              max_delay_s=max(minimum, self.ctx.config.targets.api_max_delay_s))
+            await session.ensure(tier)
+            page = await session.page(tier)
+            if "douyin.com" not in (page.url or ""):
+                page = await session.goto(tier, self.origin_url(target), settle_s=cfg.page_stay_s)
+
+            if limit and len(seen) >= limit:
+                state = "sampled"
+            else:
+                while pages < self.max_pages:
+                    self.ctx.guard(tier)
+                    self._remaining = max(0, limit - len(seen)) if limit else 0
+                    callback = getattr(self, "on_progress", None)
+                    if callback:
+                        callback({"type": "page", "kind": self.kind, "page": pages + 1,
+                                  "items": len(seen), "message": f"正在采集第 {pages + 1} 页，已确认 {len(seen)} 条；等待请求间隔…"})
+                    await self.ctx.throttle.wait(tier, cfg)
+                    self.ctx.guard(tier)
+                    self.ctx.throttle.note_request(tier)
+                    pages += 1
+                    url = self.api_url(target, cursor)
+                    request_start = time.monotonic()
+                    try:
+                        body, status, err = await self.fetch_in_page(page, url)
+                    finally:
+                        self.ctx.quota.consume(tier)
+                    duration = int((time.monotonic() - request_start) * 1000)
+                    outcome.captured += 1
+                    outcome.data_requests += 1
+                    raw_id = None
+                    if body:
+                        ref = self.ctx.archive.save(body, url=url, tier=tier, content_type="application/json",
+                            source="collect", note=f"{self.kind}:{target}:p{pages}")
+                        raw_id = ref.id
+                        outcome.raw_ids.append(raw_id)
+                    try:
+                        payload = json.loads((body or b"").decode("utf-8", errors="replace"))
+                    except (ValueError, UnicodeError):
+                        payload = None
+                    valid = isinstance(payload, dict) and status == 200 and not err and payload.get("status_code") in (0, None)
+                    self.ctx.telemetry.log_request(tier=tier, url=url, status=status, ok=valid,
+                        duration_ms=duration, byte_size=len(body or b""), error=err, task_id=task.get("id"), raw_blob_id=raw_id)
+                    if not valid:
+                        outcome.error = "接口拒绝访问（HTTP 403），需确认登录或稍后重试" if status == 403 else err or (f"接口返回 status_code={payload.get('status_code')} {payload.get('status_msg') or ''}"
+                            if isinstance(payload, dict) else f"响应不是有效 JSON（status={status}）")
+                        break
+                    clean_status = True
+                    parsed = parse_payload(url, payload, raw_blob_id=raw_id)
+                    if any("结构可能变了" in note for note in parsed.notes):
+                        outcome.error = "接口结构变化，停止采集等待核验"
+                        break
+                    parsed = self.filter_parsed(parsed, task)
+                    if self.kind == "fetch_self" and parsed.is_empty():
+                        outcome.error = "本人资料缺失，无法确认账号"
+                        break
+                    if self.kind == "fetch_likers" and not seen and not parsed.like_edges:
+                        work = self.ctx.works.get(target) or {}
+                        if payload.get("user_list") or (work.get("digg_count") or 0) > 0:
+                            outcome.error = "名单结果与作品统计不一致，完整性待核验"
+                            break
+                    if self.kind == "fetch_user_works" and not parsed.works and any("作者不是本人" in n or "归属未确认" in n for n in parsed.notes):
+                        outcome.error = "作品作者归属无法确认，等待核验"
+                        break
+                    overflow = False
+                    if limit and self.kind == "fetch_user_works":
+                        remaining = max(0, limit - len(seen))
+                        accepted, added = [], 0
+                        for work in parsed.works:
+                            identifier = str(work.get("aweme_id") or "")
+                            if identifier in seen or added < remaining:
+                                accepted.append(work)
+                                if identifier not in seen:
+                                    added += 1
+                            else:
+                                overflow = True
+                        parsed.works = accepted
+                    merged.merge(parsed)
+                    with self.ctx.db.transaction():
+                        saved = self.persist(parsed, {**task, "_captured": pages}) or {}
+                        identifiers = self._identifiers(parsed)
+                        coverage.add_items(self.kind, target, identifiers)
+                    seen.update(identifiers)
+                    for key, value in saved.items():
+                        outcome.persisted[key] = outcome.persisted.get(key, 0) + value if isinstance(value, int) and not isinstance(value, bool) else value
+                    has_more = bool((parsed.cursor or {}).get("has_more"))
+                    nxt = self.should_continue(parsed, cursor)
+                    if self.kind != "fetch_self" and ("has_more" not in (parsed.cursor or {}) or not parsed.cursor.get("has_more_known", True)):
+                        outcome.error = "响应缺少分页标志，无法确认触底"
+                    elif has_more and nxt is None:
+                        outcome.error = "游标缺失或重复，名单只完成一部分"
+                    elif has_more and parsed.is_empty():
+                        outcome.error = "分页仍有更多，但有效结果为空，等待核验"
+                    elif not has_more:
+                        state = "full" if seen else "empty"
+                    elif limit and len(seen) >= limit:
+                        state = "sampled"
+                    if has_more and nxt is not None and not overflow:
+                        cursor = nxt
+                    coverage.save(self.kind, target, state=state, item_count=len(seen), item_limit=limit,
+                        next_cursor=cursor, pages=pages, error=outcome.error, hint=task.get("_hint", ""))
+                    if callback:
+                        callback({"type": "page", "kind": self.kind, "page": pages, "items": len(seen),
+                                  "message": f"第 {pages} 页已归档，共确认 {len(seen)} 条"})
+                    if outcome.error or state in ("full", "empty", "sampled"):
+                        break
+                if state == "partial" and not outcome.error:
+                    outcome.error = "达到页数上限，尚未触底；下次继续"
+            outcome.ok = state in ("full", "empty", "sampled") and not outcome.error
+            if outcome.ok:
+                if self.kind == "fetch_likers" and state in ("full", "empty"):
+                    outcome.persisted["unconfirmed_edges"] = coverage.mark_absent_likers(target)
+                self.ctx.circuit.record_success(tier)
+            elif clean_status and seen and outcome.error.startswith("达到页数上限"):
+                self.ctx.circuit.record_success(tier)
+            elif clean_status and seen:
+                # A transport/pagination failure must not be promoted to success.
+                self.ctx.circuit.record_error(tier, outcome.error)
+            else:
+                self.ctx.circuit.record_error(tier, outcome.error or "无有效响应")
         except (QuotaExceeded, CircuitOpen) as exc:
             outcome.blocked = True
             outcome.error = str(exc)
-            return outcome
-
-        try:
-            session = await self.ctx.open_session()
-            tier_cfg = self.ctx.tier_cfg(tier)
-            await session.ensure(tier)
-
-            # 同源：先落到抖音域名下（已有页面时不会重复导航）
-            page = await session.page(tier)
-            try:
-                current = page.url or ""
-            except Exception:
-                current = ""
-            if "douyin.com" not in current:
-                await self.ctx.throttle.wait(tier, tier_cfg)
-                self.ctx.throttle.note_request(tier)
-                page = await session.goto(
-                    tier, self.origin_url(target), settle_s=tier_cfg.page_stay_s
-                )
-
-            merged = ParseResult(url=target, kind=self.kind)
-            cursor = 0
-            pages = 0
-            exhausted = False
-            clean_status = False
-
-            while pages < self.max_pages:
-                pages += 1
-                url = self.api_url(target, cursor)
-                await self.ctx.throttle.wait(tier, tier_cfg)
-                self.ctx.throttle.note_request(tier)
-
-                body, status, err = await self.fetch_in_page(page, url)
-                outcome.captured += 1
-                outcome.data_requests += 1
-
-                raw_id = None
-                if body:
-                    ref = self.ctx.archive.save(
-                        body, url=url, tier=tier, content_type="application/json",
-                        source="collect", note=f"{self.kind}:{target}:p{pages}",
-                    )
-                    raw_id = ref.id
-                    outcome.raw_ids.append(raw_id)
-
-                self.ctx.telemetry.log_request(
-                    tier=tier, url=url, status=status, ok=(status == 200 and not err),
-                    byte_size=len(body or b""), error=err, task_id=task.get("id"),
-                    raw_blob_id=raw_id,
-                )
-
-                payload = None
-                if body:
-                    try:
-                        payload = json.loads(body.decode("utf-8", errors="replace"))
-                    except Exception:
-                        payload = None
-                if payload is None:
-                    outcome.error = err or f"响应不是 JSON（status={status}）"
-                    break
-
-                code = payload.get("status_code")
-                if code not in (0, None):
-                    outcome.error = (
-                        f"接口返回 status_code={code} {payload.get('status_msg') or ''}"
-                    ).strip()
-                    break
-                clean_status = True
-
-                parsed = parse_payload(url, payload, raw_blob_id=raw_id)
-                merged.merge(parsed)
-
-                nxt = self.should_continue(parsed, cursor)
-                if nxt is None:
-                    exhausted = True
-                    break
-                cursor = nxt
-
-            self.stats["pages"] = pages
-            self.stats["exhausted"] = exhausted
-            outcome.requests = pages
-            self.ctx.quota.consume(tier, pages)
-
-            outcome.parsed = merged
-            outcome.empty = merged.is_empty()
-
-            if outcome.empty and clean_status:
-                # **接口正常返回、只是列表为空**：这个人没作品，或作品都设了私密。
-                # 这是正常结果，不是账号被降级 —— 绝不能记成"空返回"，
-                # 否则采几百个用户之后会把熔断器误触发，把正常采集也停掉。
-                outcome.ok = True
-                outcome.persisted = {
-                    "note": "接口正常返回但列表为空（无作品/私密/没人点赞）"
-                }
-                self.ctx.circuit.record_success(tier)
-            elif outcome.empty:
-                if not outcome.error:
-                    outcome.error = "响应异常且没有数据"
-                self.ctx.circuit.record_empty(tier)
-            else:
-                outcome.ok = True
-                self.ctx.circuit.record_success(tier)
-
-            if outcome.ok:
-                outcome.persisted.update(
-                    self.persist(merged, {**task, "_captured": pages}) or {}
-                )
-            outcome.persisted.update({"pages": pages, "exhausted": exhausted})
-
         except Exception as exc:
-            outcome.ok = False
             outcome.error = f"{type(exc).__name__}: {exc}"
-            try:
-                self.ctx.telemetry.log_request(
-                    tier=tier, url=target, ok=False, error=outcome.error, task_id=task.get("id")
-                )
-                self.ctx.circuit.record_error(tier, outcome.error)
-            except Exception:
-                pass
-
+            self.ctx.circuit.record_error(tier, outcome.error)
+        finally:
+            if not outcome.ok:
+                state = "partial" if seen else "error"
+            coverage.save(self.kind, target, state=state, item_count=len(seen), item_limit=limit,
+                next_cursor=cursor, pages=pages, error=outcome.error, hint=task.get("_hint", ""))
+            self.stats.update(pages=pages, exhausted=state in ("full", "empty"))
+        outcome.parsed = merged
+        outcome.empty = merged.is_empty()
+        outcome.requests = pages
+        outcome.persisted.update(pages=pages, exhausted=self.stats["exhausted"],
+                                 collection_state=state, items=len(seen))
         outcome.duration_ms = int((time.monotonic() - started) * 1000)
         return outcome

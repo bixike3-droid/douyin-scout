@@ -186,7 +186,7 @@ class ProbeReport:
         lines.append("   `config/local.yaml` 的 `browser.…` 与采集器的 include 模式。")
         lines.append("2. 如果解析结果全是 0，说明接口结构变了：用 `scout replay <raw_id>`")
         lines.append("   对归档里的原始响应重新解析，不用重新采集。")
-        lines.append("3. 把结论写进 `docs/visibility-report.md`。")
+        lines.append("3. 把结论记录成勘探文档存档（历史参考：`docs/archive/visibility-report.md`）。")
         return "\n".join(lines)
 
 

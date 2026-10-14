@@ -93,17 +93,20 @@ def normalize_work(node: dict) -> dict[str, Any]:
         urls = cover.get("url_list")
         cover_url = as_str(urls[0]) if isinstance(urls, list) and urls else as_str(cover.get("url"))
     music = node.get("music") if isinstance(node.get("music"), dict) else {}
+    def metric(*keys):
+        value = first_of(stats, keys)
+        return as_int(value if value is not None else first_of(node, keys))
     return {
         "aweme_id": as_str(node.get("aweme_id") or node.get("awemeId")),
         "author_sec_uid": as_str(dig(node, "author", "sec_uid", default="")),
         "description": as_str(first_of(node, ("desc", "description", "title"))),
         "create_time": as_int(node.get("create_time")),
         "duration_ms": as_int(first_of(node, ("duration", "duration_ms"))),
-        "digg_count": as_int(first_of(stats, ("digg_count", "like_count")) or node.get("digg_count")),
-        "comment_count": as_int(stats.get("comment_count") or node.get("comment_count")),
-        "share_count": as_int(stats.get("share_count") or node.get("share_count")),
-        "collect_count": as_int(stats.get("collect_count") or node.get("collect_count")),
-        "play_count": as_int(stats.get("play_count") or node.get("play_count")),
+        "digg_count": metric("digg_count", "like_count"),
+        "comment_count": metric("comment_count"),
+        "share_count": metric("share_count"),
+        "collect_count": metric("collect_count"),
+        "play_count": metric("play_count"),
         "music_title": as_str(music.get("title")),
         "hashtags": extract_hashtags(node),
         "cover_url": cover_url,
@@ -187,14 +190,22 @@ def extract_cursor(payload: Any) -> dict[str, Any]:
         has_more = first_of(node, _HAS_MORE_KEYS)
         if cursor not in (None, "", 0) or has_more is not None:
             value = as_str(cursor) if cursor is not None else ""
+            if isinstance(has_more, bool):
+                more = has_more
+            elif isinstance(has_more, str) and has_more.lower() in ("true", "false"):
+                more = has_more.lower() == "true"
+            else:
+                numeric = as_int(has_more)
+                more = bool(numeric) if numeric in (0, 1) else None
             return {
                 # 两个键都给：`cursor` 是通用名，`max_cursor` 是抖音的实际字段名，
                 # 翻页逻辑两个都能读，避免再出现键名对不上的问题。
                 "cursor": value,
                 "max_cursor": value,
-                "has_more": bool(as_int(has_more, 0)),
+                "has_more": bool(more),
+                "has_more_known": more is not None,
             }
-    return {"cursor": "", "max_cursor": "", "has_more": False}
+    return {"cursor": "", "max_cursor": "", "has_more": False, "has_more_known": False}
 
 
 def detect_kind(url: str) -> str:

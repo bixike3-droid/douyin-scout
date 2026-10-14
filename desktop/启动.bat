@@ -35,26 +35,34 @@ if not exist ".venv\Scripts\python.exe" (
     echo   首次运行，正在准备环境（约 2-4 分钟，只需一次）...
     echo.
     %PY% -m venv .venv
-    if not %errorlevel%==0 (
+    if errorlevel 1 (
         echo   建虚拟环境失败。
         pause
         exit /b 1
     )
     .venv\Scripts\python.exe -m pip install --quiet --upgrade pip
     echo   正在安装依赖...
-    .venv\Scripts\python.exe -m pip install --quiet -e . -i https://pypi.tuna.tsinghua.edu.cn/simple
-    .venv\Scripts\python.exe -m pip install --quiet pywebview -i https://pypi.tuna.tsinghua.edu.cn/simple
-    if not %errorlevel%==0 (
+    .venv\Scripts\python.exe -m pip install --quiet -e ".[desktop]" -i https://pypi.tuna.tsinghua.edu.cn/simple
+    if errorlevel 1 (
         echo.
         echo   依赖安装失败。检查网络后重试。
         pause
         exit /b 1
     )
-    echo   正在下载浏览器内核（约 150MB）...
-    .venv\Scripts\python.exe -m playwright install chromium
     echo.
     echo   环境准备完成。
     echo.
+)
+
+REM 已有开发环境也需要补齐桌面依赖。
+.venv\Scripts\python.exe -c "from PySide6 import QtWidgets, __version__; assert __version__ == '6.8.3'" >nul 2>&1
+if errorlevel 1 (
+    .venv\Scripts\python.exe -m pip install --quiet -e ".[desktop]" -i https://pypi.tuna.tsinghua.edu.cn/simple
+    if errorlevel 1 (
+        echo   桌面依赖安装失败。
+        pause
+        exit /b 1
+    )
 )
 
 echo   启动中...

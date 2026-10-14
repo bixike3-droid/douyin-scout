@@ -802,7 +802,9 @@ class LLMResults:
 
     def all_latest(self, task: str = "profile") -> list[dict[str, Any]]:
         return self.db.rows_as_dicts(
-            "SELECT * FROM v_llm_latest WHERE task=? ORDER BY created_at DESC", (task,)
+            "SELECT r.* FROM llm_results r WHERE r.task=? AND NOT EXISTS (SELECT 1 FROM llm_results n "
+            "WHERE n.subject_kind=r.subject_kind AND n.subject_id=r.subject_id AND n.task=r.task "
+            "AND (n.created_at>r.created_at OR (n.created_at=r.created_at AND n.id>r.id))) ORDER BY r.created_at DESC", (task,)
         )
 
     def stats(self) -> dict[str, Any]:

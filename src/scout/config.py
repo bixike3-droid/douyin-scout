@@ -281,6 +281,10 @@ class TargetsConfig:
     works_max_pages: int = 20
     # 每人最多采多少个作品（0 = 不限，按 max_pages 走）
     works_per_user_limit: int = 60
+    api_min_delay_s: float = 1.5
+    api_max_delay_s: float = 3.0
+    quick_works_limit: int = 12
+    collection_ttl_hours: int = 24
     # 统计数据的保鲜期（天）。超过就重新采一遍 ——
     # 点赞评论是会一直涨的，采一次永不更新等于在页面上挂一个冻结的数字。
     works_stats_ttl_days: int = 3

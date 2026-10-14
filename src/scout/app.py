@@ -106,9 +106,15 @@ class AppContext:
         from .session.manager import SessionManager
 
         if self.session is None:
-            self.session = await SessionManager(
+            manager = SessionManager(
                 self.config, headless_override=headless_override
-            ).start()
+            )
+            try:
+                await manager.start()
+            except BaseException:
+                await manager.stop()
+                raise
+            self.session = manager
         return self.session
 
     # ── 护栏 ────────────────────────────────────────────────
