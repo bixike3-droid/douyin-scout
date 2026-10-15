@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import asyncio
+import http.client
 import json
 import re
 import urllib.error
@@ -21,6 +22,11 @@ FETCH_LIMIT = 7000
 DEEPSEEK_SEARCH_MAX_TOKENS = 4096
 DEEPSEEK_SEARCH_MAX_USES = 5
 DEEPSEEK_SEARCH_TIMEOUT = 90
+# 长响应（10 条结果带加密块可达上百 KB）偶尔会被链路提前断开，失败重试一次
+DEEPSEEK_SEARCH_ATTEMPTS = 2
+# 服务端搜索工具版本：端点目前支持 web_search_20250305 / web_search_20260209，用最新版
+# （实测默认返回约 10 条来源；web_fetch / code_execution 等其他服务端工具不存在）。
+DEEPSEEK_SEARCH_TOOL_TYPE = "web_search_20260209"
 
 
 def _http_get(url: str, timeout: float = 25) -> tuple[int, bytes, str]:
@@ -68,12 +74,23 @@ def _deepseek_search(config, query: str, count: int) -> dict:
         "messages": [{"role": "user",
                       "content": [{"type": "text",
                                    "text": f"Perform a web search for the query: {query}"}]}],
-        "tools": [{"type": "web_search_20250305", "name": "web_search",
+        "tools": [{"type": DEEPSEEK_SEARCH_TOOL_TYPE, "name": "web_search",
                    "max_uses": DEEPSEEK_SEARCH_MAX_USES}],
     }
-    data = _http_post_json(base.rstrip("/") + "/messages", payload,
-                           {"x-api-key": api_key, "anthropic-version": "2023-06-01"},
-                           timeout=DEEPSEEK_SEARCH_TIMEOUT)
+    data = None
+    endpoint = base.rstrip("/") + "/messages"
+    headers = {"x-api-key": api_key, "anthropic-version": "2023-06-01"}
+    last_error: Exception | None = None
+    for _attempt in range(DEEPSEEK_SEARCH_ATTEMPTS):
+        try:
+            data = _http_post_json(endpoint, payload, headers, timeout=DEEPSEEK_SEARCH_TIMEOUT)
+            break
+        except urllib.error.HTTPError:
+            raise
+        except (http.client.IncompleteRead, urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+            last_error = exc
+    if data is None:
+        raise last_error or RuntimeError("DeepSeek 服务端搜索失败")
 
     sources: list[dict[str, str]] = []
     answer_parts: list[str] = []
@@ -94,6 +111,9 @@ def _deepseek_search(config, query: str, count: int) -> dict:
     answer = "\n".join(answer_parts).strip()
     if not sources and not answer:
         return {"ok": False, "summary": "DeepSeek 服务端搜索没有返回结果，换个说法或稍后再试"}
+    usage = data.get("usage") or {}
+    searches = int((usage.get("server_tool_use") or {}).get("web_search_requests") or 0)
+    suffix = f"，{searches} 次服务端请求" if searches else ""
     lines: list[str] = []
     if answer:
         lines.append(answer)
@@ -104,7 +124,7 @@ def _deepseek_search(config, query: str, count: int) -> dict:
         for index, item in enumerate(sources, 1):
             lines.append(f"{index}. {item['title']}\n   {item['url']}")
     return {"ok": True,
-            "summary": f"搜索「{query}」找到 {len(sources)} 条结果（DeepSeek 服务端搜索）",
+            "summary": f"搜索「{query}」找到 {len(sources)} 条结果（DeepSeek 服务端搜索{suffix}）",
             "content": "\n".join(lines)}
 
 

@@ -7,8 +7,8 @@
 
 - AI 团队工作台 P1（2026-10-15）：一条消息广播给全队、**自动派单**（模型判定由谁接手）、发言人以名字 + 矢量图标署名、总管开场白与建议任务；发言人随消息落库（迁移 0012），有测试覆盖。
 - 工具调用 P0（2026-10-15）：工具注册表 / 权限 / 审计（`tool_calls`，迁移 0013）；内置 `web_fetch`、`web_search`、`hot_topics`（抖音热点榜·浏览器直取）；普通对话改两段式（派单小调用 + 成员工具循环，最多 6 轮）；**真实端到端验证通过**（真 DeepSeek + 真读网页）。
-- 联网搜索升级（2026-10-15）：`web_search` 默认走 **DeepSeek 服务端搜索**（Anthropic 兼容端点 + 原生 `web_search` 工具，与官方 dsh 同路线）——复用 `llm.api_key`、免申请搜索 Key、按量计费；可选 tavily / bocha 第三方，`search.provider: off` 可关闭；真机实测通过。
-- 测试套件 312 项、309 项通过；3 项旧版企业表单流程测试未对齐对话式工作台，待处理。
+- 联网搜索升级（2026-10-15）：`web_search` 默认走 **DeepSeek 服务端搜索**（Anthropic 兼容端点 + 原生 `web_search` 工具，与官方 dsh 同路线）——复用 `llm.api_key`、免申请搜索 Key、按量计费；可选 tavily / bocha 第三方，`search.provider: off` 可关闭；真机实测通过。探测确认端点服务端工具只有 `web_search`（已用最新 `web_search_20260209`，默认约 10 条来源；`web_fetch` / 代码执行不存在，网页读取保持本地）；长响应偶发被链路掐断，已加一次自动重试。
+- 测试套件 313 项、310 项通过；3 项旧版企业表单流程测试未对齐对话式工作台，待处理。
 - 桌面启动冒烟（离屏源码模式）：`scripts/check_desktop_startup.py` 通过。
 - 打包 exe 冷启动 / 自动建库 / 正常退出：`scripts/check_native_build.ps1` 历史验证通过（产物现在写入系统临时目录）。
 - 采集链路与双档模型历史验证（27/27 点赞人、归档回放零新增请求）：见 docs/archive/handoff.md。

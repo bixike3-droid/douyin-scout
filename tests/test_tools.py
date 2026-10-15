@@ -1,5 +1,6 @@
 """工具框架：注册表 / 权限 / 审计，以及内置的联网与热点工具。"""
 import asyncio
+import http.client
 import json
 from dataclasses import replace as dc_replace
 
@@ -97,6 +98,7 @@ ANTHROPIC_SEARCH_REPLY = {
         ]},
         {"type": "text", "text": "这是搜索摘要。"},
     ],
+    "usage": {"server_tool_use": {"web_search_requests": 2}},
 }
 
 
@@ -107,7 +109,7 @@ def test_web_search_deepseek_reuses_llm_key(ctx, monkeypatch):
     def fake_post(url, payload, headers, timeout=30):
         assert url == "https://api.deepseek.com/anthropic/v1/messages"
         assert headers["x-api-key"] == "k"
-        assert payload["tools"][0]["type"] == "web_search_20250305"
+        assert payload["tools"][0]["type"] == "web_search_20260209"
         return ANTHROPIC_SEARCH_REPLY
 
     monkeypatch.setattr(web, "_http_post_json", fake_post)
@@ -116,6 +118,7 @@ def test_web_search_deepseek_reuses_llm_key(ctx, monkeypatch):
     assert "这是搜索摘要" in result["content"]
     assert "来源标题" in result["content"] and "https://s.com/a" in result["content"]
     assert "来源标题二" not in result["content"]      # count=1 时截断
+    assert "2 次服务端请求" in result["summary"]
 
 
 def test_web_search_auto_mode_uses_deepseek_when_key_present(ctx, monkeypatch):
@@ -127,6 +130,21 @@ def test_web_search_auto_mode_uses_deepseek_when_key_present(ctx, monkeypatch):
     monkeypatch.setattr(web, "_http_post_json", fake_post)
     result = asyncio.run(registry.execute(ctx, "web_search", "steward", {"query": "热点"}))
     assert result["ok"] is True and "来源标题" in result["content"]
+
+
+def test_web_search_deepseek_retries_transient_read_errors(ctx, monkeypatch):
+    ctx.config = dc_replace(ctx.config, llm=dc_replace(ctx.config.llm, api_key="k"))
+    calls = {"n": 0}
+
+    def flaky_post(url, payload, headers, timeout=30):
+        calls["n"] += 1
+        if calls["n"] == 1:                      # 第一次模拟链路掐断
+            raise http.client.IncompleteRead(b"partial")
+        return ANTHROPIC_SEARCH_REPLY
+
+    monkeypatch.setattr(web, "_http_post_json", flaky_post)
+    result = asyncio.run(registry.execute(ctx, "web_search", "steward", {"query": "热点"}))
+    assert result["ok"] is True and calls["n"] == 2
 
 
 def test_web_search_off_disables(ctx):
