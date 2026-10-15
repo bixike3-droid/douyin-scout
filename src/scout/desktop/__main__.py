@@ -5,7 +5,29 @@ import argparse
 import logging
 import os
 import sys
+import threading
 from pathlib import Path
+
+
+def install_crash_logging():
+    """窗口模式没有控制台：把未捕获异常与 Qt 警告写进桌面日志，闪退时留下现场。"""
+    def _qt_message(mode, context, message):
+        value = getattr(mode, "value", mode)
+        level = {0: logging.DEBUG, 1: logging.INFO, 2: logging.WARNING}.get(value, logging.ERROR)
+        logging.getLogger("qt").log(level, "%s", message)
+
+    try:
+        from PySide6.QtCore import qInstallMessageHandler
+        qInstallMessageHandler(_qt_message)
+    except Exception:
+        pass
+
+    def _excepthook(exc_type, exc_value, traceback):
+        logging.error("Unhandled exception", exc_info=(exc_type, exc_value, traceback))
+
+    sys.excepthook = _excepthook
+    threading.excepthook = lambda args: logging.error(
+        "Unhandled thread exception", exc_info=(args.exc_type, args.exc_value, args.exc_traceback))
 
 
 def main(default_root: Path | None = None) -> int:
@@ -51,6 +73,7 @@ def main(default_root: Path | None = None) -> int:
         log_dir = paths.root / "logs"
         log_dir.mkdir(exist_ok=True)
         logging.basicConfig(filename=log_dir / "desktop.log", encoding="utf-8", level=logging.INFO)
+        install_crash_logging()
         window = MainWindow(DesktopService(paths))
         if args.dev_mode and not getattr(sys, "frozen", False):
             from .dev import DevReload
