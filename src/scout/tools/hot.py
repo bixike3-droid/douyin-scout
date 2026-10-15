@@ -10,13 +10,15 @@ from typing import Any
 from .registry import ToolSpec, register
 from ..collect.api_base import COMMON_PARAMS
 
+# 实测（2026-10-15，匿名档 b）：该接口不需要签名，页面内 fetch 返回 50 条；
+# 注意不能带 source=trending_page（接口要求 source 为整数，传字符串会 400）。
 HOT_URL = ("https://www.douyin.com/aweme/v1/web/hot/search/list/?" + COMMON_PARAMS
-           + "&detail_list=1&source=trending_page")
+           + "&detail_list=1")
 
 
 async def _douyin_hot(ctx) -> dict:
     session = await ctx.open_session()
-    page = await session.goto("b", "https://www.douyin.com/hot")
+    page = await session.goto("b", "https://www.douyin.com/")
     ctx.guard("b")
     try:
         payload = await page.evaluate("""async (url) => {
