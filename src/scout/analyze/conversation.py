@@ -48,6 +48,14 @@ def _team_directive(forced=None):
     return directive
 
 
+def _usable_reply(output):
+    """从模型输出里取出可用的回复正文；不可用时返回 None。"""
+    if not isinstance(output, dict):
+        return None
+    value = output.get("reply")
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
 async def send(ctx, client, request, *, conversation_id=None, want_plan=False, emit=None, agent_id=None):
     emit = emit or (lambda event: None)
     if not isinstance(request, str) or not request.strip() or len(request) > 6000:
@@ -100,9 +108,16 @@ async def send(ctx, client, request, *, conversation_id=None, want_plan=False, e
         reply = await client.chat(system, json.dumps(payload, ensure_ascii=False), history=history, json_mode=True,
                                   max_tokens=8000, thinking=True, on_delta=on_delta, stop_event=stop)
         output = _parse_json(reply.text)
-        if not isinstance(output, dict) or not isinstance(output.get("reply"), str) or not output["reply"].strip():
+        text = _usable_reply(output)
+        if text is None and not stop.is_set():
+            # 思考可能占满输出预算，导致正文 JSON 被截断；关掉思考用普通模式重试一次。
+            emit({"message": "本次模型输出不可用，正在改用普通模式重试…"})
+            reply = await client.chat(system, json.dumps(payload, ensure_ascii=False), history=history, json_mode=True,
+                                      max_tokens=8000, thinking=False, on_delta=on_delta, stop_event=stop)
+            output = _parse_json(reply.text)
+            text = _usable_reply(output)
+        if text is None:
             raise ValueError("模型没有返回可用的对话回复，请重试或检查模型配置")
-        text = output["reply"].strip()
         # 自动派单：模型输出的 speaker 决定这条回复由谁署名；指定时以指定为准。
         responder = forced or agents.get(output.get("speaker"))
         report_id = None

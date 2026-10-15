@@ -129,3 +129,32 @@ def test_unknown_speaker_falls_back_to_steward(ctx):
             return LLMReply(text=json.dumps({"speaker": "ghost", "reply": "你好", "plan": None}, ensure_ascii=False), model="x")
     result = asyncio.run(send(ctx, WeirdClient(), "在吗"))
     assert result["conversation"]["messages"][-1]["agent"] == "steward"
+
+
+def test_unusable_reply_is_retried_without_thinking(ctx):
+    class FlakyClient:
+        def __init__(self):
+            self.thinking = []
+
+        async def chat(self, system, user, **kwargs):
+            self.thinking.append(kwargs.get("thinking"))
+            if len(self.thinking) == 1:
+                return LLMReply(text="这不是合法JSON，像是被截断的思考产物", model="flaky", reasoning="很长很长的思考……")
+            return LLMReply(text=json.dumps({"speaker": "data", "reply": "重试成功。", "plan": None}, ensure_ascii=False), model="flaky")
+
+    client = FlakyClient()
+    result = asyncio.run(send(ctx, client, "看看我的数据"))
+    assert client.thinking == [True, False]
+    assert not result.get("failed")
+    messages = result["conversation"]["messages"]
+    assert messages[-1]["agent"] == "data" and messages[-1]["content"] == "重试成功。"
+
+
+def test_reply_still_unusable_after_retry_marks_failure(ctx):
+    class BrokenClient:
+        async def chat(self, system, user, **kwargs):
+            return LLMReply(text="仍然不是JSON", model="broken")
+
+    result = asyncio.run(send(ctx, BrokenClient(), "看看我的数据"))
+    assert result.get("failed")
+    assert result["conversation"]["messages"][-1]["role"] == "error"
