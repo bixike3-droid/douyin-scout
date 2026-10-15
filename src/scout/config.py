@@ -327,12 +327,24 @@ class LLMConfig:
 
 @dataclass(frozen=True)
 class SearchConfig:
-    """联网搜索配置：provider（tavily / bocha）与 Key；留空表示未配置。"""
+    """联网搜索配置。
+
+    provider 取值：
+    - ""（默认）：自动模式——有 DeepSeek Key 就用服务端搜索，没有则提示先配置；
+    - "deepseek"：DeepSeek 服务端搜索。复用 llm.api_key，不另要搜索 Key；
+      搜索在 DeepSeek 服务器执行、按量计费（usage.server_tool_use.web_search_requests）；
+    - "tavily" / "bocha"：第三方搜索 API，需要 api_key；
+    - "off"：关闭联网搜索（web_search 直接说明已关闭）。
+    """
     provider: str = ""
     api_key: str = ""
+    # deepseek 服务端搜索的模型与端点；base_url 留空 = llm.base_url + /anthropic/v1
+    model: str = "deepseek-v4-flash"
+    base_url: str = ""
 
     @property
     def enabled(self) -> bool:
+        """是否显式配置了第三方搜索（deepseek 复用 llm key，不靠这里判断）。"""
         return bool(self.provider and self.api_key)
 
 

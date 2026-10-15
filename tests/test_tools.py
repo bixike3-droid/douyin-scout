@@ -87,6 +87,54 @@ def test_web_search_tavily_parses_results(ctx, monkeypatch):
     assert result["ok"] is True and "结果标题" in result["content"]
 
 
+ANTHROPIC_SEARCH_REPLY = {
+    "content": [
+        {"type": "thinking", "thinking": "先搜索"},
+        {"type": "server_tool_use", "name": "web_search", "input": {"query": "热点"}},
+        {"type": "web_search_tool_result", "tool_use_id": "t1", "content": [
+            {"type": "web_search_result", "title": "来源标题", "url": "https://s.com/a"},
+            {"type": "web_search_result", "title": "来源标题二", "url": "https://s.com/b"},
+        ]},
+        {"type": "text", "text": "这是搜索摘要。"},
+    ],
+}
+
+
+def test_web_search_deepseek_reuses_llm_key(ctx, monkeypatch):
+    ctx.config = dc_replace(ctx.config, llm=dc_replace(ctx.config.llm, api_key="k"),
+                            search=SearchConfig(provider="deepseek"))
+
+    def fake_post(url, payload, headers, timeout=30):
+        assert url == "https://api.deepseek.com/anthropic/v1/messages"
+        assert headers["x-api-key"] == "k"
+        assert payload["tools"][0]["type"] == "web_search_20250305"
+        return ANTHROPIC_SEARCH_REPLY
+
+    monkeypatch.setattr(web, "_http_post_json", fake_post)
+    result = asyncio.run(registry.execute(ctx, "web_search", "steward", {"query": "热点", "count": 1}))
+    assert result["ok"] is True
+    assert "这是搜索摘要" in result["content"]
+    assert "来源标题" in result["content"] and "https://s.com/a" in result["content"]
+    assert "来源标题二" not in result["content"]      # count=1 时截断
+
+
+def test_web_search_auto_mode_uses_deepseek_when_key_present(ctx, monkeypatch):
+    ctx.config = dc_replace(ctx.config, llm=dc_replace(ctx.config.llm, api_key="k"))
+
+    def fake_post(url, payload, headers, timeout=30):
+        return ANTHROPIC_SEARCH_REPLY
+
+    monkeypatch.setattr(web, "_http_post_json", fake_post)
+    result = asyncio.run(registry.execute(ctx, "web_search", "steward", {"query": "热点"}))
+    assert result["ok"] is True and "来源标题" in result["content"]
+
+
+def test_web_search_off_disables(ctx):
+    ctx.config = dc_replace(ctx.config, search=SearchConfig(provider="off"))
+    result = asyncio.run(registry.execute(ctx, "web_search", "steward", {"query": "热点"}))
+    assert result["ok"] is False and "关闭" in result["summary"]
+
+
 def test_hot_topics_parses_word_list(ctx, monkeypatch):
     async def fake_hot(context):
         return {"data": {"word_list": [{"word": "测试热点一", "hot_value": 123}, {"word": "测试热点二"}]}}
