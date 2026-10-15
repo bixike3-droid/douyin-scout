@@ -261,6 +261,9 @@ async def _send_chat(ctx, client, request, conversation_id, emit, forced, confir
         convo: list[dict] = [*history, {"role": "user", "content": request}]
         reasoning_parts: list[str] = []
         final_text = ""
+        # 工具内部的长任务（如采集）通过这个回调把进度事件上报到界面；
+        # 属于本次对话的一次性管道（ctx 随本次操作创建、结束即弃）。
+        ctx.tool_emit = emit
         for _step in range(MAX_TOOL_STEPS):
             reply = await client.chat_messages(system, list(convo), tools=tools, json_mode=False,
                                                max_tokens=8000, thinking=True,

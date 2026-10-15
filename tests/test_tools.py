@@ -13,7 +13,8 @@ from scout.tools import hot, web
 def test_builtin_tools_registered_with_schemas():
     assert {"web_fetch", "web_search", "hot_topics"} <= set(registry.REGISTRY)
     specs = registry.specs_for("steward")
-    assert len(specs) == len(registry.REGISTRY)
+    expected = [spec for spec in registry.REGISTRY.values() if registry.allows(spec, "steward")]
+    assert len(specs) == len(expected)
     for spec in specs:
         assert spec["type"] == "function"
         assert spec["function"]["name"] and spec["function"]["description"]
@@ -280,3 +281,75 @@ def test_records_search_empty_and_bad_view(ctx):
     assert empty["ok"] is True and "没有" in empty["summary"]
     bad = asyncio.run(registry.execute(ctx, "records_search", "data", {"view": "nope"}))
     assert bad["ok"] is False
+
+
+def test_collect_tools_are_data_only_and_confirm_level():
+    login = registry.get("collect_login")
+    start = registry.get("collect_start")
+    assert login is not None and start is not None
+    assert login.level == "confirm" and start.level == "confirm"
+    assert login.agents == ("data",) and start.agents == ("data",)
+    assert registry.allows(start, "data") and not registry.allows(start, "audience")
+    names = {item["function"]["name"] for item in registry.specs_for("audience")}
+    assert "collect_start" not in names
+
+
+def test_collect_start_runs_action_after_approval(ctx, monkeypatch):
+    from scout.desktop import actions
+
+    captured = {}
+
+    async def fake_collect(context, emit, options):
+        captured["options"] = options
+        emit({"message": "第 1 个任务 · 点赞人名单：成功"})
+        return {"message": "采集结束：完成 2 项（采样 2）；有效互动者 3 人。"}
+
+    monkeypatch.setattr(actions, "collect", fake_collect)
+    events = []
+    ctx.tool_emit = events.append
+
+    async def approve(spec, agent_id, args):
+        return True
+
+    result = asyncio.run(registry.execute(ctx, "collect_start", "data",
+                                          {"kinds": "quick", "limit": 20}, confirm=approve))
+    assert result["ok"] is True and "采集结束" in result["summary"]
+    assert captured["options"] == {"kinds": "quick", "limit": 20, "force": False}
+    assert events and events[0]["message"].startswith("第 1 个任务")
+    row = ctx.db.query_one("SELECT status FROM tool_calls ORDER BY id DESC LIMIT 1")
+    assert row["status"] == "complete"
+
+
+def test_collect_start_declined_never_runs(ctx, monkeypatch):
+    from scout.desktop import actions
+
+    called = []
+
+    async def fake_collect(context, emit, options):
+        called.append(1)
+        return {"message": "不该被调用"}
+
+    monkeypatch.setattr(actions, "collect", fake_collect)
+
+    async def decline(spec, agent_id, args):
+        return False
+
+    result = asyncio.run(registry.execute(ctx, "collect_start", "data", {}, confirm=decline))
+    assert result["ok"] is False and called == []
+    row = ctx.db.query_one("SELECT status FROM tool_calls ORDER BY id DESC LIMIT 1")
+    assert row["status"] == "declined"
+
+
+def test_collect_start_reports_action_errors(ctx, monkeypatch):
+    from scout.desktop import actions
+
+    async def fake_collect(context, emit, options):
+        raise ValueError("请先点击窗口顶部的「登录抖音」")
+
+    monkeypatch.setattr(actions, "collect", fake_collect)
+
+    async def approve(spec, agent_id, args):
+        return True
+
+    result = asyncio.run(registry.execute(ctx, "collect_start", "data", {}, confirm=approve))
+    assert result["ok"] is False and "登录抖音" in result["summary"]
