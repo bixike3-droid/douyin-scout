@@ -56,6 +56,12 @@ QPushButton#retryAction { background: #2A3140; border: 1px solid #4A5568; color:
 QPushButton#retryAction:hover { border-color: #9F7DEF; background: #313A4B; }
 QPushButton#scrollBottom { background: #2A3140; border: 1px solid #46516A; color: #C7D0E2; padding: 6px 14px; border-radius: 15px; font-size: 12px; }
 QPushButton#scrollBottom:hover { background: #333D50; border-color: #5A6580; }
+QFrame#hotRow { background: #232936; border: 1px solid #2E3646; border-radius: 9px; }
+QFrame#hotRow:hover { background: #2A3140; border-color: #4A5568; }
+QLabel#hotRank { color: #6B7686; font-size: 12px; font-weight: 600; }
+QFrame#diagramCard { background: #232936; border: 1px solid #2E3646; border-radius: 9px; }
+QLabel#diagramImage { color: #C9D3E4; }
+QFrame#confirmCard { background: #232936; border: 1px solid #4A5568; border-radius: 9px; }
 QLabel#stepBadge { background: #272E39; color: #B0B8CA; border: 1px solid #475063; border-radius: 18px; font-size: 16px; }
 QLabel#stepBadge[active="true"] { background: #8054F5; border-color: #AD8AFF; color: white; }
 QLabel#stepTitle { color: #B9C0D0; font-size: 13px; }

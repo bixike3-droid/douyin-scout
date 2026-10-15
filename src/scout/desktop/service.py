@@ -1,6 +1,7 @@
 """Desktop operations. Every call owns its database connection."""
 from __future__ import annotations
 
+import asyncio
 import os
 import tempfile
 from pathlib import Path
@@ -75,6 +76,25 @@ class DesktopService:
                 "config_file": str(self.paths.config_dir / "llm.local.yaml"),
                 "quick_works_limit": cfg.targets.quick_works_limit,
                 "browser": cfg.browser.channel or "Chromium"}
+
+    def hot_board(self):
+        """抓取抖音实时热点并做 AI 可用性评估（同步入口，供后台任务调用）。"""
+        from ..analyze.hotboard import load_hot_board
+        cfg = load_config(self.paths)
+
+        async def run():
+            ctx = AppContext.create(cfg)
+            try:
+                return await load_hot_board(ctx)
+            finally:
+                if ctx.session is not None:
+                    await ctx.session.stop()
+                ctx.close()
+
+        try:
+            return asyncio.run(run())
+        except Exception as exc:  # noqa: BLE001 —— 失败也返回失败态给面板
+            return {"error": f"热点获取失败：{type(exc).__name__}：{str(exc)[:140]}", "fetched_at": ""}
 
     def save_settings(self, api_key: str, model: str):
         target = self.paths.config_dir / "llm.local.yaml"

@@ -186,6 +186,47 @@ def test_confirmation_card_marks_timeout_without_click(qt_app):
         pane.deleteLater()
 
 
+def test_right_tabs_are_hot_plan_canvas(qt_app):
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        assert [pane.right_tabs.tabText(i) for i in range(3)] == ["抖音热点", "内容方案", "可视化"]
+        assert "自动生成" in pane.canvas_panel.hint.text()
+    finally:
+        pane.deleteLater()
+
+
+def test_hot_panel_marks_and_click_sends_task(qt_app):
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        requests = []
+        pane.task_requested.connect(lambda content, want_plan: requests.append(content))
+        pane.hot_panel.apply({"topics": [
+            {"word": "乡村振兴", "heat": 123, "mark": "可用", "why": "贴合文旅"},
+            {"word": "明星绯闻", "heat": 99, "mark": "无关", "why": "损伤调性"},
+        ], "usable": 1, "note": "", "fetched_at": "2026-10-15T12:00:00Z"})
+        assert "可用 1 条" in pane.hot_panel.status.text()
+        assert len(pane.hot_panel._rows) == 2
+        first = pane.hot_panel._rows[0]
+        first.clicked.emit(first.topic)
+        assert requests and "乡村振兴" in requests[0] and "借势" in requests[0]
+    finally:
+        pane.deleteLater()
+
+
+def test_hot_panel_error_state(qt_app):
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        pane.hot_panel.apply({"error": "热点获取失败：RuntimeError：没登录"})
+        assert "热点获取失败" in pane.hot_panel.status.text()
+        pane.hot_panel.set_loading()
+        assert not pane.hot_panel.refresh_button.isEnabled()
+    finally:
+        pane.deleteLater()
+
+
 def test_reasoning_panel_is_collapsed_until_clicked(qt_app):
     from scout.desktop.harness import ReasoningPanel
     panel = ReasoningPanel("第一步推理。\n第二步推理。", running=False)

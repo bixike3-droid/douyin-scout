@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -445,6 +446,7 @@ class MainWindow(QMainWindow):
         self.enterprise.report_selected.connect(self._highlight_recent_task)
         self.enterprise.conversation_selected.connect(self._highlight_conversation)
         self.enterprise.confirmation_answered.connect(self._confirmation_answered)
+        self.enterprise.hot_refresh_requested.connect(self._refresh_hot_board)
         self.enterprise.save_requested.connect(self._save_enterprise)
         self.enterprise.generate_requested.connect(lambda force: self._start_operation("enterprise", {"force": force}))
         self.enterprise.report_requested.connect(self._request_enterprise_report)
@@ -772,7 +774,7 @@ class MainWindow(QMainWindow):
         self.operation_message.setText(result["message"])
         if result.get("kind") == "enterprise" and result.get("report_id"):
             self.enterprise_report_id = result["report_id"]
-            self.enterprise.right_tabs.setCurrentIndex(0)
+            self.enterprise.right_tabs.setCurrentIndex(1)
         if result.get("kind") == "enterprise":
             self.enterprise.set_processing(False, result["message"])
         if result.get("kind") == "chat":
@@ -784,7 +786,7 @@ class MainWindow(QMainWindow):
                 self.ui_preferences.setValue("lastConversation", result["conversation"]["id"])
             if result.get("report_id"):
                 self.enterprise_report_id = result["report_id"]
-                self.enterprise.right_tabs.setCurrentIndex(0)
+                self.enterprise.right_tabs.setCurrentIndex(1)
             self.enterprise.set_processing(False)
         self.pending = True
         QTimer.singleShot(3000, self._hide_operation_panel)
@@ -797,6 +799,23 @@ class MainWindow(QMainWindow):
     def _confirmation_answered(self, request_id, approved):
         # 界面里的用户点了允许/拒绝 → 回送给 worker 线程里等待的确认请求
         self.operations.broker.resolve(request_id, approved)
+
+    def _load_hot_board(self):
+        panel = self.enterprise.hot_panel
+        if os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"):
+            return  # 离屏模式（测试 / 预览截图）不自动拉热点
+        if self.closing or not self.initialized or self.jobs.busy or self.operations.busy:
+            return
+        panel.loaded_once = True
+        panel.set_loading()
+        self.jobs.submit(lambda: ("hotboard", None, self.service.hot_board()))
+
+    def _refresh_hot_board(self):
+        if self.jobs.busy or self.operations.busy:
+            self.statusBar().showMessage("请等待当前操作结束")
+            return
+        self.enterprise.hot_panel.set_loading()
+        self.jobs.submit(lambda: ("hotboard", None, self.service.hot_board()))
 
     def _operation_busy(self, busy):
         self.cancel_button.setEnabled(busy)
@@ -1006,6 +1025,8 @@ class MainWindow(QMainWindow):
                         self.ui_preferences.remove("lastConversation")
             elif self.nav.currentRow() not in (5, 6):
                 self.pending = True
+            if not self.enterprise.hot_panel.loaded_once:
+                QTimer.singleShot(300, self._load_hot_board)
         elif key in ("enterprise", "enterprise_saved", "enterprise_submit"):
             self.enterprise.apply_workspace(data, saved=key in ("enterprise_saved", "enterprise_submit"))
             if key == "enterprise_submit":
@@ -1026,6 +1047,9 @@ class MainWindow(QMainWindow):
         elif key == "settings":
             self.key_input.clear()
             self._settings(data)
+        elif key == "hotboard":
+            self.enterprise.hot_panel.apply(data)
+            return
         elif self.records[key].search.text() == search:
             self.records[key].apply(data)
         else:

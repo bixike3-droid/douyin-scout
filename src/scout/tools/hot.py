@@ -5,6 +5,8 @@
 """
 from __future__ import annotations
 
+import asyncio
+import json
 from typing import Any
 
 from .registry import ToolSpec, register
@@ -14,22 +16,44 @@ from ..collect.api_base import COMMON_PARAMS
 # 注意不能带 source=trending_page（接口要求 source 为整数，传字符串会 400）。
 HOT_URL = ("https://www.douyin.com/aweme/v1/web/hot/search/list/?" + COMMON_PARAMS
            + "&detail_list=1")
+# 走浏览器上下文直接请求时必须带 Referer，否则接口返回空体（2026-10-15 实测）。
+HOT_HEADERS = {"Referer": "https://www.douyin.com/"}
 
 
 async def _douyin_hot(ctx) -> dict:
     session = await ctx.open_session()
     page = await session.goto("b", "https://www.douyin.com/")
     ctx.guard("b")
+    last_error: Exception | None = None
     try:
-        payload = await page.evaluate("""async (url) => {
-            const response = await fetch(url, {credentials: 'include'});
-            if (!response.ok) return null;
-            return await response.json();
-        }""", HOT_URL)
+        payload = None
+        # 主通道：浏览器上下文直接发请求——首页偶发跳转（验证码中间页）也打不断它
+        for attempt in range(2):
+            try:
+                response = await page.request.get(HOT_URL, headers=HOT_HEADERS)
+                if response.status == 200:
+                    body = await response.text()
+                    if body.strip():
+                        payload = json.loads(body)
+                        break
+                last_error = RuntimeError(f"HTTP {response.status}")
+            except Exception as exc:
+                last_error = exc
+                await asyncio.sleep(1.2)
+        # 兜底：页面内 fetch（旧路线）
+        if not payload:
+            try:
+                payload = await page.evaluate("""async (url) => {
+                    const response = await fetch(url, {credentials: 'include'});
+                    if (!response.ok) return null;
+                    return await response.json();
+                }""", HOT_URL)
+            except Exception as exc:
+                last_error = exc
     finally:
         ctx.quota.consume("b")
     if not payload:
-        raise RuntimeError("热点接口没有返回数据（可能触发了验证或页面结构变化）")
+        raise RuntimeError(f"热点接口没有返回数据（{type(last_error).__name__}：{str(last_error)[:80]}）")
     return payload
 
 
