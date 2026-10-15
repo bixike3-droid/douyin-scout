@@ -55,14 +55,26 @@ def display_name(tool_id: str) -> str:
 
 
 async def execute(ctx, tool_id: str, agent_id: str, args: dict, *,
-                  conversation_id: int | None = None) -> dict[str, Any]:
-    """执行工具：权限校验 → 执行 → 审计。失败返回 {"ok": False, "summary": ...}，不抛异常。"""
+                  conversation_id: int | None = None,
+                  confirm: Callable[[ToolSpec, str, dict], Awaitable[bool]] | None = None) -> dict[str, Any]:
+    """执行工具：权限校验 → （按需）用户确认 → 执行 → 审计。失败返回 {"ok": False, "summary": ...}，不抛异常。"""
     spec = get(tool_id)
     if spec is None or spec.handler is None:
         return {"ok": False, "summary": f"没有名为 {tool_id} 的工具"}
     if not allows(spec, agent_id):
         _audit(ctx, conversation_id, agent_id, tool_id, args, "denied", "该成员没有此工具权限", 0)
         return {"ok": False, "summary": "当前成员没有调用这个工具的权限"}
+    if spec.level == "confirm":
+        if confirm is None:
+            _audit(ctx, conversation_id, agent_id, tool_id, args, "denied", "需要用户确认，但当前环境没有确认通道", 0)
+            return {"ok": False, "summary": "这个操作需要用户先确认；当前环境没有确认通道，请在源镜桌面工作台里发起"}
+        try:
+            approved = bool(await confirm(spec, agent_id, args or {}))
+        except Exception:  # noqa: BLE001 —— 确认通道故障按未允许处理
+            approved = False
+        if not approved:
+            _audit(ctx, conversation_id, agent_id, tool_id, args, "declined", "用户未允许（拒绝或超时）", 0)
+            return {"ok": False, "summary": "用户没有允许这个操作，不要重复发起；可以改为说明操作影响，或先问清用户意图"}
     started = time.monotonic()
     try:
         result = await spec.handler(ctx, args or {})

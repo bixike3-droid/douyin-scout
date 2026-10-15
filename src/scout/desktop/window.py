@@ -444,6 +444,7 @@ class MainWindow(QMainWindow):
         self.enterprise.history_changed.connect(self._update_recent_tasks)
         self.enterprise.report_selected.connect(self._highlight_recent_task)
         self.enterprise.conversation_selected.connect(self._highlight_conversation)
+        self.enterprise.confirmation_answered.connect(self._confirmation_answered)
         self.enterprise.save_requested.connect(self._save_enterprise)
         self.enterprise.generate_requested.connect(lambda force: self._start_operation("enterprise", {"force": force}))
         self.enterprise.report_requested.connect(self._request_enterprise_report)
@@ -735,7 +736,20 @@ class MainWindow(QMainWindow):
             self.enterprise.set_processing(True, f"「{event.get('name') or '成员'}」接手，正在处理…")
             return
         if event.get("type") == "tool":
-            if event.get("phase") == "start":
+            phase = event.get("phase")
+            if phase == "confirm":
+                self.enterprise.show_confirmation(event)
+                waiting = f"等待你确认：「{event.get('name') or event.get('tool')}」"
+                self.enterprise.set_processing(True, waiting)
+                self.operation_message.setText(waiting)
+                self.statusBar().showMessage(waiting)
+                return
+            if phase == "confirm_done":
+                self.enterprise.resolve_confirmation(event)
+                self.enterprise.set_processing(True,
+                                               "已允许，继续执行…" if event.get("approved") else "已拒绝，继续对话…")
+                return
+            if phase == "start":
                 self.enterprise.set_processing(True, f"{event.get('name') or event.get('tool')} 执行中…")
             else:
                 summary = str(event.get("summary") or "")
@@ -779,6 +793,10 @@ class MainWindow(QMainWindow):
         # 操作结束后收起顶部操作条；失败信息由 _error 保留显示。
         if not self.operations.busy and self.operation_panel.isVisible():
             self.operation_panel.hide()
+
+    def _confirmation_answered(self, request_id, approved):
+        # 界面里的用户点了允许/拒绝 → 回送给 worker 线程里等待的确认请求
+        self.operations.broker.resolve(request_id, approved)
 
     def _operation_busy(self, busy):
         self.cancel_button.setEnabled(busy)

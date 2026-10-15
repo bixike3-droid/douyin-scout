@@ -57,7 +57,7 @@ def _usable_reply(output):
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
-async def send(ctx, client, request, *, conversation_id=None, want_plan=False, emit=None, agent_id=None):
+async def send(ctx, client, request, *, conversation_id=None, want_plan=False, emit=None, agent_id=None, confirm=None):
     emit = emit or (lambda event: None)
     if not isinstance(request, str) or not request.strip() or len(request) > 6000:
         raise ValueError("请输入消息（不超过6000字）")
@@ -68,7 +68,7 @@ async def send(ctx, client, request, *, conversation_id=None, want_plan=False, e
         conversation_id = store.create(request)
     if want_plan:
         return await _send_plan(ctx, client, request, conversation_id, emit, forced)
-    return await _send_chat(ctx, client, request, conversation_id, emit, forced)
+    return await _send_chat(ctx, client, request, conversation_id, emit, forced, confirm=confirm)
 
 
 async def _send_plan(ctx, client, request, conversation_id, emit, forced):
@@ -221,8 +221,11 @@ async def _route(client, request, history, forced, emit):
         return agents.get(None)
 
 
-async def _send_chat(ctx, client, request, conversation_id, emit, forced):
-    """普通对话：派单 → 成员带工具干活（工具结果回喂，最多 MAX_TOOL_STEPS 轮）→ 纯文本回复。"""
+async def _send_chat(ctx, client, request, conversation_id, emit, forced, confirm=None):
+    """普通对话：派单 → 成员带工具干活（结果回喂，最多 MAX_TOOL_STEPS 轮）→ 纯文本回复。
+
+    confirm：需要用户确认的工具把「问一句」交给它（返回 True/False）；缺省时这类工具会被拒绝。
+    """
     store = Conversations(ctx.db)
     history = store.history(conversation_id)
     snapshot = json.dumps({"request": request, "history": history}, ensure_ascii=False)
@@ -288,7 +291,8 @@ async def _send_chat(ctx, client, request, conversation_id, emit, forced):
                         args = {}
                 except ValueError:
                     args = {}
-                result = await tools_registry.execute(ctx, name, member.id, args, conversation_id=conversation_id)
+                result = await tools_registry.execute(ctx, name, member.id, args,
+                                                      conversation_id=conversation_id, confirm=confirm)
                 emit({"type": "tool", "phase": "done", "tool": name, "ok": bool(result.get("ok")),
                       "summary": str(result.get("summary") or ""), "agent": member.id})
                 convo.append({"role": "tool", "tool_call_id": call["id"] or name,

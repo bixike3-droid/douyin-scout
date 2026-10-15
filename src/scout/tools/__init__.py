@@ -5,5 +5,6 @@
 from . import registry  # noqa: F401
 from . import web  # noqa: F401
 from . import hot  # noqa: F401
+from . import data  # noqa: F401
 
-__all__ = ["registry", "web", "hot"]
+__all__ = ["registry", "web", "hot", "data"]

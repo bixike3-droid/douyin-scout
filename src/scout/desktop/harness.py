@@ -139,7 +139,63 @@ class Composer(QPlainTextEdit):
         super().inputMethodEvent(event)
 
 
+class ConfirmationCard(QFrame):
+    """工具执行前的用户确认卡：出现在对话流里，允许或拒绝由用户点。"""
+
+    answered = Signal(str, bool)
+
+    def __init__(self, event):
+        super().__init__()
+        self.setObjectName("confirmCard")
+        self.request_id = str(event.get("request_id") or "")
+        member = get_agent(event.get("agent"))
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(8)
+        title = QLabel(f"「{member.name}」想执行「{event.get('name') or event.get('tool')}」，需要你确认")
+        title.setObjectName("confirmTitle")
+        title.setWordWrap(True)
+        layout.addWidget(title)
+        detail = str(event.get("detail") or "").strip()
+        if detail:
+            hint = text(f"参数：{detail}", "muted")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        self.allow = QPushButton("允许")
+        self.allow.setObjectName("primary")
+        self.allow.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.allow.clicked.connect(lambda: self._decide(True))
+        self.deny = QPushButton("拒绝")
+        self.deny.setObjectName("retryAction")
+        self.deny.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.deny.clicked.connect(lambda: self._decide(False))
+        row.addWidget(self.allow)
+        row.addWidget(self.deny)
+        row.addStretch()
+        self.state = text("", "muted")
+        row.addWidget(self.state)
+        layout.addLayout(row)
+
+    def _decide(self, approved):
+        if not self.allow.isEnabled():
+            return
+        self.allow.setEnabled(False)
+        self.deny.setEnabled(False)
+        self.state.setText("已允许，执行中…" if approved else "已拒绝")
+        self.answered.emit(self.request_id, approved)
+
+    def mark_resolved(self, approved):
+        """执行端回执：用户已点过则保留其选择文案；超时等情况补一个说明。"""
+        self.allow.setEnabled(False)
+        self.deny.setEnabled(False)
+        if not self.state.text():
+            self.state.setText("已允许" if approved else "未确认（拒绝或超时），未执行")
+
+
 class HarnessPage(EnterprisePage):
+    confirmation_answered = Signal(str, bool)
     navigate_requested = Signal(str)
     task_requested = Signal(str, bool)
     cancel_requested = Signal()
@@ -162,6 +218,8 @@ class HarnessPage(EnterprisePage):
         self.conversation_data = None
         self.forms_dialog = None
         self.reasoning_panel = None
+        # 待用户确认的工具卡：request_id → 卡片控件
+        self._confirmation_cards: dict = {}
         # 已渲染到对话流里的消息条数；同会话续聊时据此只追加新条目，不整块重建。
         self._rendered_count = 0
         self._scroll_animation = None
@@ -866,6 +924,24 @@ class HarnessPage(EnterprisePage):
             messages = list(self.conversation_data["messages"])
         messages.append({"role": "error", "content": message, "status": "failed"})
         self._render_messages(messages)
+
+    def show_confirmation(self, event):
+        """工具执行前的确认卡：追加到对话流末尾，等用户点「允许 / 拒绝」。"""
+        card = ConfirmationCard(event)
+        card.answered.connect(self.confirmation_answered)
+        self.transcript.show()
+        self.transcript_layout.addWidget(card)
+        card.show()
+        if self.motion_enabled:
+            fade_in(card, True)
+        self._confirmation_cards[card.request_id] = card
+        self._scroll_chat_bottom()
+
+    def resolve_confirmation(self, event):
+        """执行端回执：更新卡片状态（用户点过则不覆盖）。"""
+        card = self._confirmation_cards.pop(str(event.get("request_id") or ""), None)
+        if card is not None:
+            card.mark_resolved(bool(event.get("approved")))
 
 
 class SafeMessageBrowser(QTextBrowser):

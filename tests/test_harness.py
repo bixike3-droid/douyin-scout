@@ -150,6 +150,42 @@ def test_message_header_shows_agent_name(qt_app):
         pane.deleteLater()
 
 
+def test_confirmation_card_requires_user_choice(qt_app):
+    from PySide6.QtWidgets import QLabel
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        answered = []
+        pane.confirmation_answered.connect(lambda rid, ok: answered.append((rid, ok)))
+        pane.show_confirmation({"request_id": "r1", "tool": "collect", "name": "开始采集",
+                                "agent": "data", "detail": '{"kinds": "quick"}'})
+        card = pane._confirmation_cards["r1"]
+        labels = " ".join(label.text() for label in card.findChildren(QLabel))
+        assert "数据管家" in labels and "开始采集" in labels
+        assert card.allow.isEnabled() and card.deny.isEnabled()
+        card.allow.click()
+        assert answered == [("r1", True)]
+        assert not card.allow.isEnabled() and not card.deny.isEnabled()   # 点过之后按钮锁死
+        card.deny.click()
+        assert answered == [("r1", True)]                                  # 第二次点击无效
+        pane.resolve_confirmation({"request_id": "r1", "approved": True})
+        assert "已允许" in card.state.text()
+    finally:
+        pane.deleteLater()
+
+
+def test_confirmation_card_marks_timeout_without_click(qt_app):
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        pane.show_confirmation({"request_id": "r2", "tool": "collect", "name": "开始采集", "agent": "data"})
+        card = pane._confirmation_cards["r2"]
+        pane.resolve_confirmation({"request_id": "r2", "approved": False})
+        assert not card.allow.isEnabled() and "未确认" in card.state.text()
+    finally:
+        pane.deleteLater()
+
+
 def test_reasoning_panel_is_collapsed_until_clicked(qt_app):
     from scout.desktop.harness import ReasoningPanel
     panel = ReasoningPanel("第一步推理。\n第二步推理。", running=False)

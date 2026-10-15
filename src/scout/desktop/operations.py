@@ -5,6 +5,7 @@ import asyncio
 import threading
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from ..tools.confirm import ConfirmationBroker
 from .actions import execute
 
 
@@ -58,6 +59,8 @@ class Operations(QObject):
         super().__init__(parent)
         self.paths = paths
         self.thread = None
+        # 长驻确认通道：worker 线程 await，Qt 主线程 resolve（见 tools/confirm.py）
+        self.broker = ConfirmationBroker()
 
     @property
     def busy(self):
@@ -66,7 +69,8 @@ class Operations(QObject):
     def start(self, kind, options=None):
         if self.busy:
             return False
-        thread = OperationThread(self.paths, kind, options or {})
+        options = {**(options or {}), "broker": self.broker}
+        thread = OperationThread(self.paths, kind, options)
         self.thread = thread
         thread.event.connect(self.event)
         thread.succeeded.connect(self.succeeded)

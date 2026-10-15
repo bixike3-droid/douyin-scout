@@ -193,9 +193,13 @@ async def execute(paths, kind, emit, options=None):
             from ..analyze.conversation import send
             from ..llm import DeepSeekClient
             options = options or {}
+            confirm = None
+            broker = options.get("broker")
+            if broker is not None:
+                confirm = broker.confirmer(emit)
             return await send(ctx, DeepSeekClient(ctx.config.llm), options.get("request", ""),
                 conversation_id=options.get("conversation_id"), want_plan=bool(options.get("want_plan")),
-                emit=emit, agent_id=options.get("agent"))
+                emit=emit, agent_id=options.get("agent"), confirm=confirm)
         if kind == "enterprise":
             from ..analyze.enterprise import generate
             from ..llm import DeepSeekClient

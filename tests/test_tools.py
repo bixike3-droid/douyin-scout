@@ -2,6 +2,7 @@
 import asyncio
 import http.client
 import json
+import threading
 from dataclasses import replace as dc_replace
 
 from scout.config import SearchConfig
@@ -171,3 +172,111 @@ def test_hot_topics_tolerates_missing_structure():
 def test_unknown_tool_rejected(ctx):
     result = asyncio.run(registry.execute(ctx, "not_a_tool", "steward", {}))
     assert result["ok"] is False
+
+
+def test_confirm_level_tool_requires_channel(ctx):
+    async def handler(context, args):
+        return {"ok": True, "summary": "执行了"}
+
+    registry.register(registry.ToolSpec(id="risky_tool", name="风险工具", description="x",
+                                        parameters={}, level="confirm", handler=handler))
+    try:
+        result = asyncio.run(registry.execute(ctx, "risky_tool", "steward", {}))
+        assert result["ok"] is False and "确认" in result["summary"]
+        row = ctx.db.query_one("SELECT status FROM tool_calls WHERE tool='risky_tool'")
+        assert row["status"] == "denied"
+    finally:
+        registry.REGISTRY.pop("risky_tool", None)
+
+
+def test_confirm_level_tool_executes_only_after_approval(ctx):
+    ran = []
+
+    async def handler(context, args):
+        ran.append(1)
+        return {"ok": True, "summary": "执行了"}
+
+    async def approve(spec, agent_id, args):
+        return True
+
+    async def decline(spec, agent_id, args):
+        return False
+
+    registry.register(registry.ToolSpec(id="risky_tool", name="风险工具", description="x",
+                                        parameters={}, level="confirm", handler=handler))
+    try:
+        denied = asyncio.run(registry.execute(ctx, "risky_tool", "steward", {}, confirm=decline))
+        assert denied["ok"] is False and ran == []
+        allowed = asyncio.run(registry.execute(ctx, "risky_tool", "steward", {}, confirm=approve))
+        assert allowed["ok"] is True and ran == [1]
+        rows = ctx.db.rows_as_dicts("SELECT status FROM tool_calls WHERE tool='risky_tool' ORDER BY id")
+        assert [row["status"] for row in rows] == ["declined", "complete"]
+    finally:
+        registry.REGISTRY.pop("risky_tool", None)
+
+
+def test_confirmation_broker_round_trip_across_threads():
+    from scout.tools.confirm import ConfirmationBroker
+
+    broker = ConfirmationBroker(timeout_s=5)
+    rid = broker.new_id()
+    box = {}
+
+    def from_ui_thread():
+        # 模拟 Qt 主线程：在另一个线程里把用户选择送回来
+        for _ in range(200):
+            if broker.resolve(rid, True):
+                box["ok"] = True
+                return
+            import time as _time
+            _time.sleep(0.005)
+
+    async def main():
+        task = asyncio.create_task(broker.ask(rid))
+        thread = threading.Thread(target=from_ui_thread)
+        thread.start()
+        approved = await task
+        thread.join()
+        return approved
+
+    assert asyncio.run(main()) is True and box.get("ok") is True
+
+
+def test_confirmation_broker_confirmer_emits_events():
+    from scout.tools.confirm import ConfirmationBroker
+
+    broker = ConfirmationBroker(timeout_s=5)
+    events = []
+    ask_user = broker.confirmer(events.append)
+    spec = registry.ToolSpec(id="cleanup", name="清理", description="", parameters={}, level="confirm")
+
+    async def main():
+        async def ui():
+            for _ in range(200):
+                pending = [e for e in events if e.get("phase") == "confirm"]
+                if pending:
+                    broker.resolve(pending[0]["request_id"], False)
+                    return
+                await asyncio.sleep(0.005)
+        ui_task = asyncio.create_task(ui())
+        approved = await ask_user(spec, "data", {"scope": "all"})
+        await ui_task
+        return approved
+
+    assert asyncio.run(main()) is False
+    assert [e.get("phase") for e in events] == ["confirm", "confirm_done"]
+    assert events[0]["tool"] == "cleanup" and events[0]["agent"] == "data"
+    assert events[-1]["approved"] is False
+
+
+def test_data_overview_reports_counts(ctx):
+    result = asyncio.run(registry.execute(ctx, "data_overview", "data", {}))
+    assert result["ok"] is True
+    assert "作品" in result["content"] and "互动者" in result["content"]
+
+
+def test_records_search_empty_and_bad_view(ctx):
+    empty = asyncio.run(registry.execute(ctx, "records_search", "data", {"view": "users", "query": "不存在"}))
+    assert empty["ok"] is True and "没有" in empty["summary"]
+    bad = asyncio.run(registry.execute(ctx, "records_search", "data", {"view": "nope"}))
+    assert bad["ok"] is False

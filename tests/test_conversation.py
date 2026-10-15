@@ -205,3 +205,39 @@ def test_member_uses_tool_and_feeds_result_back(ctx, monkeypatch):
     assert result["conversation"]["messages"][-1]["content"].startswith("网页我看过了")
     row = ctx.db.query_one("SELECT agent,tool,status FROM tool_calls ORDER BY id DESC LIMIT 1")
     assert row["agent"] == "steward" and row["tool"] == "web_fetch" and row["status"] == "complete"
+
+
+def test_confirm_tool_denied_by_user_is_reported_back(ctx, monkeypatch):
+    from scout.tools import registry as tools
+
+    ran = []
+
+    async def cleanup(context, args):
+        ran.append(1)
+        return {"ok": True, "summary": "清理完成"}
+
+    monkeypatch.setitem(tools.REGISTRY, "cleanup_tool",
+                        tools.ToolSpec(id="cleanup_tool", name="清理缓存", description="测试用", parameters={},
+                                       level="confirm", handler=cleanup))
+
+    class ToolTeam(TeamClient):
+        async def chat_messages(self, system, messages, **kwargs):
+            self.message_calls.append((system, messages, kwargs))
+            if len(self.message_calls) == 1:
+                return LLMReply(text="", model="m",
+                                tool_calls=[{"id": "call_1", "name": "cleanup_tool", "arguments": "{}"}])
+            tool_messages = [m for m in messages if m.get("role") == "tool"]
+            assert tool_messages and "没有允许" in tool_messages[-1]["content"]
+            return LLMReply(text="明白，先不清理。", model="m")
+
+    asked = []
+
+    async def deny(spec, agent_id, args):
+        asked.append(spec.id)
+        return False
+
+    result = asyncio.run(send(ctx, ToolTeam(), "帮我清理一下", confirm=deny))
+    assert asked == ["cleanup_tool"] and ran == []
+    assert result["conversation"]["messages"][-1]["content"].startswith("明白")
+    row = ctx.db.query_one("SELECT status FROM tool_calls ORDER BY id DESC LIMIT 1")
+    assert row["status"] == "declined"
