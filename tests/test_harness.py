@@ -180,8 +180,11 @@ def test_continuation_appends_without_rebuilding_transcript(qt_app, ctx, monkeyp
 
     class SlowClient:
         async def chat(self, system, user, **kwargs):
+            return LLMReply(text=json.dumps({"speaker": "steward"}), model="m")
+
+        async def chat_messages(self, system, messages, **kwargs):
             await asyncio.sleep(0.5)
-            return LLMReply(text=json.dumps({"reply": "好的。", "plan": None}, ensure_ascii=False), model="m")
+            return LLMReply(text="好的。", model="m")
 
     monkeypatch.setattr(scout.llm, "DeepSeekClient", lambda cfg: SlowClient())
     service = DesktopService(ctx.paths)
@@ -252,8 +255,11 @@ def test_generate_button_turns_into_stop_and_cancels(qt_app, ctx, monkeypatch):
 
     class SlowClient:
         async def chat(self, system, user, **kwargs):
+            return LLMReply(text=json.dumps({"speaker": "steward"}), model="m")
+
+        async def chat_messages(self, system, messages, **kwargs):
             await asyncio.sleep(1.2)
-            return LLMReply(text=json.dumps({"reply": "来不及了", "plan": None}, ensure_ascii=False), model="m")
+            return LLMReply(text="来不及了", model="m")
 
     monkeypatch.setattr(scout.llm, "DeepSeekClient", lambda cfg: SlowClient())
     service = DesktopService(ctx.paths)
@@ -314,7 +320,10 @@ def test_failed_message_retry_button_resends_last_request(qt_app, ctx, monkeypat
 
     class FastClient:
         async def chat(self, system, user, **kwargs):
-            return LLMReply(text=json.dumps({"reply": "重试后的回复", "plan": None}, ensure_ascii=False), model="m")
+            return LLMReply(text=json.dumps({"speaker": "steward"}), model="m")
+
+        async def chat_messages(self, system, messages, **kwargs):
+            return LLMReply(text="重试后的回复", model="m")
 
     monkeypatch.setattr(scout.llm, "DeepSeekClient", lambda cfg: FastClient())
     service = DesktopService(ctx.paths)

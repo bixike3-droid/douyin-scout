@@ -284,3 +284,15 @@ interactions:
 web:
   host: 127.0.0.1
   port: 8787
+
+# ── 联网搜索（可选）────────────────────────────────────────
+# 团队成员的 web_search 工具用它查实时信息；不配置则该工具会提示先配置。
+# provider 支持 tavily（海外，英文/学术好）与 bocha（国内，中文好）。
+# Key 建议放 config/local.yaml（不进版本库）：
+#   search:
+#     provider: bocha
+#     api_key: "sk-..."
+search:
+  provider: ""
+  api_key: ""
+

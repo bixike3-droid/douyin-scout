@@ -731,6 +731,16 @@ class MainWindow(QMainWindow):
         if event.get("type") == "answering":
             self.enterprise.mark_answering()
             return
+        if event.get("type") == "assigned":
+            self.enterprise.set_processing(True, f"「{event.get('name') or '成员'}」接手，正在处理…")
+            return
+        if event.get("type") == "tool":
+            if event.get("phase") == "start":
+                self.enterprise.set_processing(True, f"{event.get('name') or event.get('tool')} 执行中…")
+            else:
+                summary = str(event.get("summary") or "")
+                self.enterprise.set_processing(True, summary or "工具执行完成")
+            return
         if self.enterprise.processing and "phase" not in event and message:
             self.enterprise.set_processing(True, message)
         if "phase" in event:

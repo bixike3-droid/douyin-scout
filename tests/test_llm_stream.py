@@ -85,3 +85,16 @@ def test_chat_drops_thinking_when_service_rejects_it(monkeypatch):
     reply = asyncio.run(llm_client.DeepSeekClient(cfg).chat("sys", "你好", thinking=True, on_delta=lambda kind, text: None))
     assert reply.text == '{"reply":"ok","plan":null}'
     assert [("thinking" in payload) for payload in payloads] == [True, False]
+
+
+def test_stream_assembles_tool_call_arguments(monkeypatch):
+    lines = [
+        'data: {"model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"web_fetch","arguments":"{\\"url\\":"}}]}}]}',
+        'data: {"model":"m","choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"https://e.com\\"}"}}]}}]}',
+        'data: {"model":"m","choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+        "data: [DONE]",
+    ]
+    monkeypatch.setattr(llm_client.urllib.request, "urlopen", lambda req, timeout=None: FakeResponse(lines))
+    result = llm_client._post_stream("http://fake", {}, {}, 5.0, lambda kind, text: None)
+    assert result["tool_calls"] == [{"id": "call_1", "name": "web_fetch", "arguments": '{"url":"https://e.com"}'}]
+    assert result["content"] == ""

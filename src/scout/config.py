@@ -326,6 +326,17 @@ class LLMConfig:
 
 
 @dataclass(frozen=True)
+class SearchConfig:
+    """联网搜索配置：provider（tavily / bocha）与 Key；留空表示未配置。"""
+    provider: str = ""
+    api_key: str = ""
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.provider and self.api_key)
+
+
+@dataclass(frozen=True)
 class Config:
     paths: Paths
     app: AppConfig
@@ -339,6 +350,7 @@ class Config:
     # 放在这里而不是写死在代码里，是为了改版时只改 YAML。
     interactions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     llm: LLMConfig = field(default_factory=LLMConfig)
+    search: SearchConfig = field(default_factory=SearchConfig)
     sources: tuple[str, ...] = ()
 
     def tier(self, name: str) -> TierConfig:
@@ -420,5 +432,6 @@ def load_config(paths: Paths | None = None, extra_files: list[Path] | None = Non
         web=_build(WebConfig, merged.get("web")),
         interactions=dict(merged.get("interactions") or {}),
         llm=_build(LLMConfig, merged.get("llm")),
+        search=_build(SearchConfig, merged.get("search")),
         sources=tuple(sources),
     )

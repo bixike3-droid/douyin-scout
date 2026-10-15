@@ -15,7 +15,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from ..config import LLMConfig
@@ -38,6 +38,7 @@ class LLMReply:
     retries: int = 0
     reasoning: str = ""
     reasoning_tokens: int = 0
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:
@@ -89,6 +90,7 @@ def _post_stream(
     req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     reasoning: list[str] = []
     content: list[str] = []
+    calls: dict[int, dict] = {}
     usage: dict = {}
     model = ""
     produced = False
@@ -121,6 +123,17 @@ def _post_stream(
                     produced = True
                     content.append(piece)
                     on_delta("content", piece)
+                for call in delta.get("tool_calls") or []:
+                    # 流式工具调用：参数按 index 分片拼装（与 OpenAI 协议一致）。
+                    index = int(call.get("index") or 0)
+                    slot = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+                    if call.get("id"):
+                        slot["id"] = str(call["id"])
+                    function = call.get("function") or {}
+                    if function.get("name"):
+                        slot["name"] = str(function["name"])
+                    if function.get("arguments"):
+                        slot["arguments"] += str(function["arguments"])
     except urllib.error.HTTPError as exc:
         detail = ""
         try:
@@ -132,7 +145,8 @@ def _post_stream(
         raise
     except Exception as exc:
         raise LLMError(f"请求失败：{exc}", no_retry=produced) from None
-    return {"reasoning": "".join(reasoning), "content": "".join(content), "usage": usage, "model": model}
+    return {"reasoning": "".join(reasoning), "content": "".join(content), "usage": usage, "model": model,
+            "tool_calls": [calls[index] for index in sorted(calls)]}
 
 
 class DeepSeekClient:
@@ -161,32 +175,52 @@ class DeepSeekClient:
         thinking: bool = False,
         on_delta: Callable[[str, str], None] | None = None,
         stop_event: threading.Event | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> LLMReply:
-        """一次对话调用。
+        """一次对话调用（单轮 user 消息的便捷写法），详见 chat_messages。"""
+        return await self.chat_messages(
+            system,
+            [*(history or []), {"role": "user", "content": user}],
+            json_mode=json_mode, temperature=temperature, max_tokens=max_tokens,
+            thinking=thinking, on_delta=on_delta, stop_event=stop_event, tools=tools)
+
+    async def chat_messages(
+        self,
+        system: str,
+        messages: list[dict[str, Any]],
+        *,
+        json_mode: bool = True,
+        temperature: float | None = None,
+        max_tokens: int = 2000,
+        thinking: bool = False,
+        on_delta: Callable[[str, str], None] | None = None,
+        stop_event: threading.Event | None = None,
+        tools: list[dict[str, Any]] | None = None,
+    ) -> LLMReply:
+        """多轮对话调用（支持 tool 消息与 function calling）。
 
         - thinking=True 请求思维链（DeepSeek thinking 模式，返回 reasoning_content）。
         - on_delta 非空时用流式：每段增量回调 on_delta(kind, text)，
           kind 为 "reasoning"（思维链）或 "content"（正式回答）。
+        - tools 非空时携带工具定义；模型可能返回 tool_calls（流式同样支持）。
+        - json_mode 与 tools 不同时使用（response_format 与工具调用互斥）。
         - stop_event 置位后尽快中断流式读取（用户取消）。
         """
-        history = history or []
-        if any(m.get("role") not in ("user", "assistant") or not isinstance(m.get("content"), str) for m in history):
-            raise LLMError("对话历史格式错误")
+        if any(m.get("role") not in ("user", "assistant", "tool") for m in messages):
+            raise LLMError("对话消息格式错误")
         stream = on_delta is not None
         payload: dict[str, Any] = {
             "model": self.cfg.model,
-            "messages": [
-                {"role": "system", "content": system},
-                *history,
-                {"role": "user", "content": user},
-            ],
+            "messages": [{"role": "system", "content": system}, *messages],
             "temperature": self.cfg.temperature if temperature is None else temperature,
             "max_tokens": max_tokens,
             "stream": stream,
         }
-        if json_mode:
-            # DeepSeek 支持 JSON 输出模式，能避免它夹带解释文字
+        if json_mode and not tools:
+            # DeepSeek 支持 JSON 输出模式，能避免它夹带解释文字；与工具调用互斥。
             payload["response_format"] = {"type": "json_object"}
+        if tools:
+            payload["tools"] = tools
         thinking_requested = thinking
         if thinking_requested:
             payload["thinking"] = {"type": "enabled"}
@@ -229,7 +263,8 @@ class DeepSeekClient:
                 usage = raw.get("usage") or {}
                 content = (raw.get("content") or "").strip()
                 reasoning = (raw.get("reasoning") or "").strip()
-                if not content and not reasoning:
+                tool_calls = raw.get("tool_calls") or []
+                if not content and not reasoning and not tool_calls:
                     last_err = LLMError("流式响应没有内容")
                     await asyncio.sleep(1.5 * (attempt + 1))
                     continue
@@ -242,6 +277,7 @@ class DeepSeekClient:
                     retries=attempt,
                     reasoning=reasoning,
                     reasoning_tokens=_reasoning_tokens(usage),
+                    tool_calls=tool_calls,
                 )
 
             choices = raw.get("choices") or []
@@ -250,6 +286,12 @@ class DeepSeekClient:
                 continue
             message = choices[0].get("message") or {}
             usage = raw.get("usage") or {}
+            tool_calls = []
+            for call in message.get("tool_calls") or []:
+                function = call.get("function") or {}
+                tool_calls.append({"id": str(call.get("id") or ""),
+                                   "name": str(function.get("name") or ""),
+                                   "arguments": str(function.get("arguments") or "")})
             return LLMReply(
                 text=(message.get("content") or "").strip(),
                 model=raw.get("model") or self.cfg.model,
@@ -259,6 +301,7 @@ class DeepSeekClient:
                 retries=attempt,
                 reasoning=(message.get("reasoning_content") or "").strip(),
                 reasoning_tokens=_reasoning_tokens(usage),
+                tool_calls=tool_calls,
             )
 
         raise LLMError(f"重试 {self.cfg.max_retries} 次仍失败：{last_err}")
