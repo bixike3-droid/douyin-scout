@@ -3,6 +3,7 @@ import asyncio
 import json
 import threading
 
+from . import agents
 from .ai import _parse_json
 from .enterprise import build_input, validate_output, render_output
 from ..store.enterprise import EnterpriseStore
@@ -24,12 +25,36 @@ topics 1至5项，每项包含title、platform、hook、outline、cta、needs_co
 measurement、unknowns各1至8个非空字符串。引用编号只能来自本次context.evidence。
 历史方案仅是建议，不是实际效果证据。历史对话是用户与助手的发言，不是已核实的企业事实。"""
 
+TEAM_ROUTING = """【AI 团队与自动派单】用户的消息是发给整个团队的，只有最合适的一名成员负责回复。
+你在回复前先判断该由谁接手：
+- 打招呼、整体性提问、需要多人协调 → steward 源镜
+- 登录、采集、数据完整性、清洗 → data 数据管家
+- 谁在点赞、人群画像、受众特征 → audience 受众分析师
+- 作品指标、播放与互动表现 → content 内容分析师
+- 选题、传播方案、内容优化 → strategy 传播策略师
+- 报告整理、执行回顾、历史对比 → review 复盘顾问
+团队成员：
+{roster}
+输出 JSON 在原字段基础上增加 speaker 字段（接手成员的 id），并以该成员的身份、职责与口吻回复；
+其他成员不发言，不要以多人轮流的口吻说话。"""
 
-async def send(ctx, client, request, *, conversation_id=None, want_plan=False, emit=None):
+
+def _team_directive(forced=None):
+    roster = "\n".join(f"- {member.id} {member.name}（{member.role}）：{member.persona}" for member in agents.TEAM)
+    directive = "\n\n" + TEAM_ROUTING.format(roster=roster)
+    if forced is not None:
+        directive += (f"\n【本次指定】这条消息由「{forced.name}」（{forced.role}）直接负责，"
+                      f"speaker 固定为 {forced.id}。{forced.persona}")
+    return directive
+
+
+async def send(ctx, client, request, *, conversation_id=None, want_plan=False, emit=None, agent_id=None):
     emit = emit or (lambda event: None)
     if not isinstance(request, str) or not request.strip() or len(request) > 6000:
         raise ValueError("请输入消息（不超过6000字）")
     request = request.strip()
+    forced = agents.get(agent_id) if agent_id else None
+    system = SYSTEM + _team_directive(forced)
     store = Conversations(ctx.db)
     if conversation_id is None:
         conversation_id = store.create(request)
@@ -72,12 +97,14 @@ async def send(ctx, client, request, *, conversation_id=None, want_plan=False, e
             emit({"type": "answering"})
 
     try:
-        reply = await client.chat(SYSTEM, json.dumps(payload, ensure_ascii=False), history=history, json_mode=True,
+        reply = await client.chat(system, json.dumps(payload, ensure_ascii=False), history=history, json_mode=True,
                                   max_tokens=8000, thinking=True, on_delta=on_delta, stop_event=stop)
         output = _parse_json(reply.text)
         if not isinstance(output, dict) or not isinstance(output.get("reply"), str) or not output["reply"].strip():
             raise ValueError("模型没有返回可用的对话回复，请重试或检查模型配置")
         text = output["reply"].strip()
+        # 自动派单：模型输出的 speaker 决定这条回复由谁署名；指定时以指定为准。
+        responder = forced or agents.get(output.get("speaker"))
         report_id = None
         plan = output.get("plan")
         if plan is not None:
@@ -89,12 +116,12 @@ async def send(ctx, client, request, *, conversation_id=None, want_plan=False, e
                 context["evidence"][0]["data"]["request"] = request
                 context["conversation_history"] = history
                 cur = ctx.db.conn.execute("INSERT INTO enterprise_reports(created_at,prompt_version,system_prompt,model,input_digest,input_json,output_json,prompt_tokens,completion_tokens,duration_ms) VALUES(?,?,?,?,?,?,?,?,?,?)",
-                    (iso(), VERSION, SYSTEM, reply.model, sha256_bytes(snapshot.encode()), json.dumps(context, ensure_ascii=False),
+                    (iso(), VERSION, system, reply.model, sha256_bytes(snapshot.encode()), json.dumps(context, ensure_ascii=False),
                      json.dumps(plan, ensure_ascii=False), reply.prompt_tokens, reply.completion_tokens, reply.duration_ms))
                 report_id = cur.lastrowid
         with ctx.db.transaction():
             ctx.db.execute("UPDATE conversation_messages SET status='complete' WHERE id=?", (user_id,))
-            store.add(conversation_id, "assistant", text, reply=reply, input_json=snapshot, reasoning=reply.reasoning)
+            store.add(conversation_id, "assistant", text, reply=reply, input_json=snapshot, reasoning=reply.reasoning, agent=responder.id)
             if report_id:
                 ctx.db.execute("UPDATE conversations SET report_id=? WHERE id=?", (report_id, conversation_id))
         return {"conversation": store.get(conversation_id), "report_id": report_id, "message": "模型回复已保存"}

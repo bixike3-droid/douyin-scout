@@ -3,12 +3,13 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QTextBlockFormat, QTextCursor
-from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QFrame, QPushButton, QPlainTextEdit,
+from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QPushButton, QPlainTextEdit,
     QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel)
+from ..analyze.agents import DEFAULT_AGENT_ID, TEAM, get as get_agent
 from .enterprise import EnterprisePage, report_time
 from .components import text
 from .motion import ActivityDot, Disclosure, fade_in
-from .theme import icon
+from .theme import agent_badge, icon
 
 
 def clear_layout(layout):
@@ -195,47 +196,41 @@ class HarnessPage(EnterprisePage):
         main = QVBoxLayout(center)
         main.setContentsMargins(20, 20, 20, 14)
         main.setSpacing(14)
-        self.task_title = text("新建对话", "taskHeading")
+        self.task_title = text("新任务", "taskHeading")
         self.task_title.setMaximumHeight(60)
         main.addWidget(self.task_title)
-        self.task_date = text("使用设置中的企业资料，可以直接对话。", "muted")
+        self.task_date = text("把你要解决的问题说给团队，合适的同事会来接手。", "muted")
         main.addWidget(self.task_date)
-        steps = QHBoxLayout()
+        # 团队一览：一条消息全队可见，由团队自动派单，不需要手动选人。
         self.step_labels = []
-        for i, (title, note) in enumerate((("企业资料", "了解资源与定位"), ("作品复盘", "分析内容表现"),
-                                           ("选题建议", "生成内容方案"), ("人工复核", "确认并导出"))):
-            column = QVBoxLayout()
-            column.setSpacing(4)
-            badge = text(str(i + 1), "stepBadge")
+        self.agent_bar = QWidget()
+        bar_layout = QGridLayout(self.agent_bar)
+        bar_layout.setContentsMargins(0, 0, 0, 0)
+        bar_layout.setHorizontalSpacing(14)
+        bar_layout.setVerticalSpacing(7)
+        for index, member in enumerate(TEAM):
+            cell = QWidget()
+            cell_layout = QHBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(7)
+            badge = QLabel()
+            badge.setObjectName("agentAvatar")
+            badge.setFixedSize(26, 26)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            badge.setFixedSize(36, 36)
-            column.addWidget(badge, alignment=Qt.AlignmentFlag.AlignHCenter)
-            title_label = text(title, "stepTitle")
-            title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            column.addWidget(title_label)
-            caption = text(note, "muted")
-            caption.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            column.addWidget(caption)
-            steps.addLayout(column, 1)
-            self.step_labels.append((badge, title_label))
-            if i < 3:
-                line = QFrame()
-                line.setObjectName("stepLine")
-                line.setFixedSize(24, 1)
-                line_holder = QWidget()
-                line_holder.setFixedSize(24, 36)
-                line_layout = QVBoxLayout(line_holder)
-                line_layout.setContentsMargins(0, 0, 0, 0)
-                line_layout.addWidget(line, alignment=Qt.AlignmentFlag.AlignVCenter)
-                steps.addWidget(line_holder, alignment=Qt.AlignmentFlag.AlignTop)
-        main.addLayout(steps)
+            badge.setPixmap(agent_badge(member.color, member.icon, 26).pixmap(26, 26))
+            cell_layout.addWidget(badge)
+            cell_layout.addWidget(text(member.name, "agentName"))
+            cell.setToolTip(member.name + " · " + member.role)
+            bar_layout.addWidget(cell, index // 3, index % 3, Qt.AlignmentFlag.AlignLeft)
+        main.addWidget(self.agent_bar)
         scroll = QScrollArea()
         self.chat_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.viewport().installEventFilter(self)
         scroll.verticalScrollBar().valueChanged.connect(self._on_chat_scrolled)
-        self.scroll_float = QPushButton("↓  回到底部", scroll.viewport())
+        self.scroll_float = QPushButton("回到底部", scroll.viewport())
         self.scroll_float.setObjectName("scrollBottom")
+        self.scroll_float.setIcon(icon("arrowDown", "#C7D0E2", 15))
         self.scroll_float.setCursor(Qt.CursorShape.PointingHandCursor)
         self.scroll_float.clicked.connect(self._jump_to_bottom)
         self.scroll_float.hide()
@@ -244,36 +239,29 @@ class HarnessPage(EnterprisePage):
         flow = QVBoxLayout(body)
         flow.setContentsMargins(0, 8, 0, 0)
         flow.setSpacing(10)
-        user_header = QHBoxLayout()
-        avatar = QLabel()
-        avatar.setObjectName("userAvatar")
-        avatar.setFixedSize(34, 34)
-        avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        avatar.setPixmap(icon("users", "#F0E9FF", 20).pixmap(20, 20))
-        self.user_avatar = avatar
-        user_header.addWidget(avatar)
-        self.user_speaker = text("你", "speaker")
-        user_header.addWidget(self.user_speaker)
-        user_header.addStretch()
-        flow.addLayout(user_header)
-        self.request_bubble = text("在下方描述这次想解决的传播问题。", "userBubble")
-        self.request_bubble.setMinimumHeight(44)
-        flow.addWidget(self.request_bubble)
         ai_header = QHBoxLayout()
-        ai_avatar = QLabel()
-        ai_avatar.setObjectName("aiAvatar")
-        ai_avatar.setFixedSize(34, 34)
-        ai_avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        ai_avatar.setPixmap(icon("sparkles", "#AF8FFF", 23).pixmap(23, 23))
-        self.ai_avatar = ai_avatar
-        ai_header.addWidget(ai_avatar)
+        self.ai_avatar = QLabel()
+        self.ai_avatar.setObjectName("agentAvatar")
+        self.ai_avatar.setFixedSize(34, 34)
+        self.ai_avatar.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ai_header.addWidget(self.ai_avatar)
         self.activity = ActivityDot()
         ai_header.addWidget(self.activity)
-        self.ai_speaker = text("使用提示", "speaker")
-        ai_header.addWidget(self.ai_speaker, 1)
+        self.ai_speaker = text("", "speaker")
+        ai_header.addWidget(self.ai_speaker)
+        self.ai_role = text("", "muted")
+        ai_header.addWidget(self.ai_role)
+        ai_header.addStretch()
         flow.addLayout(ai_header)
-        self.assistant_bubble = text("可以直接讨论选题、作品或传播问题。企业背景从设置读取；资料不完整时，在对话中补充即可。", "assistantBubble")
+        self.assistant_bubble = text("", "assistantBubble")
         flow.addWidget(self.assistant_bubble)
+        self.suggestion_row = QWidget()
+        self.suggestion_layout = QHBoxLayout(self.suggestion_row)
+        self.suggestion_layout.setContentsMargins(0, 0, 0, 0)
+        self.suggestion_layout.setSpacing(8)
+        self.suggestion_buttons = []
+        self.suggestion_layout.addStretch()
+        flow.addWidget(self.suggestion_row)
         self.transcript = QWidget()
         self.transcript_layout = QVBoxLayout(self.transcript)
         self.transcript_layout.setContentsMargins(0, 0, 0, 0)
@@ -323,15 +311,10 @@ class HarnessPage(EnterprisePage):
         box.setSpacing(6)
         self.composer = Composer()
         self.composer.setObjectName("composer")
-        self.composer.setPlaceholderText("描述这次想解决的传播问题…")
+        self.composer.setPlaceholderText("对源镜团队说点什么…")
         self.composer.submitted.connect(self._generate)
         box.addWidget(self.composer)
         row = QHBoxLayout()
-        self.attach_button = QPushButton("企业资料")
-        self.attach_button.setObjectName("linkButton")
-        self.attach_button.setIcon(icon("attach", "#AFB5C2", 17))
-        self.attach_button.clicked.connect(lambda: self.open_forms(0))
-        row.addWidget(self.attach_button)
         self.force.hide()
         self.plan_button = QPushButton("生成方案")
         self.plan_button.setObjectName("linkButton")
@@ -341,7 +324,7 @@ class HarnessPage(EnterprisePage):
         row.addWidget(self.generate_button)
         box.addLayout(row)
         main.addWidget(composer_box)
-        main.addWidget(text("Enter 发送，Shift + Enter 换行", "composerHint"))
+        main.addWidget(text("Enter 发送 · Shift + Enter 换行 · 团队会自动把任务交给最合适的人", "composerHint"))
         self.splitter.addWidget(center)
         right = QWidget()
         right.setObjectName("resultPane")
@@ -383,6 +366,30 @@ class HarnessPage(EnterprisePage):
         self.splitter.addWidget(right)
         self.splitter.setSizes([720, 480])
         self._empty_plan()
+        self._show_team_greeting()
+
+    def _show_team_greeting(self):
+        steward = get_agent(DEFAULT_AGENT_ID)
+        self.ai_avatar.setPixmap(agent_badge(steward.color, steward.icon, 34).pixmap(34, 34))
+        self.ai_speaker.setText(steward.name)
+        self.ai_role.setText(steward.role)
+        self.assistant_bubble.setText(steward.greeting)
+        clear_layout(self.suggestion_layout)
+        self.suggestion_buttons = []
+        for suggestion in steward.suggestions:
+            button = QPushButton(suggestion)
+            button.setObjectName("suggestionChip")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda checked=False, value=suggestion: self._use_suggestion(value))
+            self.suggestion_layout.addWidget(button)
+            self.suggestion_buttons.append(button)
+        self.suggestion_layout.addStretch()
+
+    def _use_suggestion(self, value):
+        if self.processing:
+            return
+        self.composer.setPlainText(value)
+        self._generate()
 
     def _empty_plan(self):
         clear_layout(self.plan_layout)
@@ -450,9 +457,9 @@ class HarnessPage(EnterprisePage):
         self.reasoning_panel = None
         self._rendered_count = 0
         clear_layout(self.transcript_layout)
-        self.request_bubble.show()
         self.assistant_bubble.show()
-        for widget in (self.user_avatar, self.user_speaker, self.ai_avatar, self.ai_speaker):
+        self.suggestion_row.show()
+        for widget in (self.ai_avatar, self.ai_speaker, self.ai_role, self.activity):
             widget.show()
         for stage in self.stage_cards:
             stage.show()
@@ -466,10 +473,9 @@ class HarnessPage(EnterprisePage):
         self.reviewed.setChecked(False)
         self.report_select.setCurrentIndex(-1)
         self.applying = False
-        self.task_title.setText("新建对话")
-        self.task_date.setText("可以直接发送；读取已保存的企业资料，缺失信息在对话中说明。")
-        self.request_bubble.setText("在下方描述这次想解决的传播问题。")
-        self.assistant_bubble.setText("可以直接发送消息。企业背景从设置读取；普通交流不会强制生成方案。")
+        self.task_title.setText("新任务")
+        self.task_date.setText("把你要解决的问题说给团队，合适的同事会来接手。")
+        self._show_team_greeting()
         self.topics_summary.setText("生成后将在右侧显示选题、内容优化与策略。")
         self.review_summary.setText("暂无待复核报告。")
         self.composer.clear()
@@ -509,13 +515,12 @@ class HarnessPage(EnterprisePage):
         company = report["input"]["evidence"][0]["data"]
         request = company.get("request") or company.get("goal") or "传播决策报告"
         if self.conversation_id is None:
-            self.transcript.hide()
-            self.request_bubble.show()
-            self.assistant_bubble.show()
             self.task_title.setText(request)
             self.task_date.setText("创建时间：" + report_time(report["created_at"]))
-            self.request_bubble.setText(request)
-            self.assistant_bubble.setText(report["output"]["summary"])
+            self._render_messages([
+                {"role": "user", "content": request, "status": "complete", "agent": ""},
+                {"role": "assistant", "content": report["output"]["summary"], "status": "complete", "agent": DEFAULT_AGENT_ID},
+            ])
         self.topics_summary.setText(f"已生成 {len(report['output']['topics'])} 个选题，内容与依据见右侧。")
         self.review_summary.setText("用户已复核，修改记录已保存。" if report["revisions"] and report["revisions"][-1]["reviewed"] else "建议已生成，等待人工核实事实与执行条件。")
         self._render_plan(report)
@@ -609,7 +614,7 @@ class HarnessPage(EnterprisePage):
         self.controls_enabled = enabled
         for widget in (self.force, self.composer, self.save_profile_button,
                        self.save_revision_button, self.export_button, self.metrics_button, self.report_select,
-                       self.reason, self.reviewed, self.attach_button, self.modify_button, self.plan_button):
+                       self.reason, self.reviewed, self.agent_bar, self.suggestion_row, self.modify_button, self.plan_button):
             widget.setEnabled(enabled)
         # "处理中"的按钮此时是"停止"，即使全局禁用也要保持可点，用于中断生成。
         self.generate_button.setEnabled(enabled or self.processing)
@@ -766,17 +771,18 @@ class HarnessPage(EnterprisePage):
 
     def _switch_to_transcript_view(self):
         self.transcript.show()
-        for widget in (self.user_avatar, self.user_speaker, self.ai_avatar, self.ai_speaker):
+        for widget in (self.ai_avatar, self.ai_speaker, self.ai_role, self.activity):
             widget.hide()
         for stage in self.stage_cards:
             stage.hide()
-        self.request_bubble.hide()
         self.assistant_bubble.hide()
+        self.suggestion_row.hide()
 
     def _message_widgets(self, message):
         """单条消息对应的控件：说话人行（含悬停工具条）、可选思考过程、正文气泡。"""
         role = message["role"]
-        title = "你" if role == "user" else ("调用问题" if role == "error" else "源镜助手")
+        agent = get_agent(message.get("agent"))
+        title = "你" if role == "user" else ("调用问题" if role == "error" else agent.name)
         container = QWidget()
         container.setObjectName("messageBlock")
         container.installEventFilter(self)
@@ -785,7 +791,17 @@ class HarnessPage(EnterprisePage):
         block.setSpacing(10)
         header = QHBoxLayout()
         header.setSpacing(8)
-        header.addWidget(text(title, "speaker"))
+        if role == "assistant":
+            badge = QLabel()
+            badge.setObjectName("agentAvatar")
+            badge.setFixedSize(20, 20)
+            badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            badge.setPixmap(agent_badge(agent.color, agent.icon, 20).pixmap(20, 20))
+            header.addWidget(badge)
+        speaker = text(title, "speaker")
+        if role == "assistant":
+            speaker.setToolTip(agent.role)
+        header.addWidget(speaker)
         header.addStretch()
         toolbar = QWidget()
         toolbar.setObjectName("messageToolbar")

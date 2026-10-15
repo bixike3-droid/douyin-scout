@@ -43,6 +43,10 @@ QLabel#userBubble { background: #292F39; color: #E4E6EE; border-radius: 9px; pad
 QLabel#assistantBubble { background: #252B35; color: #D4D8E3; border-radius: 9px; padding: 15px; }
 QLabel#userAvatar { background: #8054F5; border-radius: 17px; }
 QLabel#aiAvatar { background: #20232E; border: 1px solid #8464C5; border-radius: 17px; }
+QLabel#agentAvatar { background: transparent; border: none; }
+QLabel#agentName { color: #98A2B5; font-size: 12px; }
+QPushButton#suggestionChip { background: #232936; border: 1px dashed #3E4859; border-radius: 15px; padding: 7px 14px; color: #B7C0D2; font-size: 12px; }
+QPushButton#suggestionChip:hover { border-color: #9F7DEF; color: #E6DDFF; background: #2A3040; }
 QFrame#stageCard { background: #202630; border: 1px solid #363F4D; border-radius: 9px; }
 QPushButton#stageToggle { background: transparent; border: none; padding: 1px 0; text-align: left; color: #E1E4EF; font-weight: 600; }
 QPushButton#stageToggle:hover { color: #C9D3E4; }
@@ -217,6 +221,76 @@ def icon(name, color="#9CB0D0", size=22):
         elif name == "stop":
             p.setBrush(QColor(shade))
             p.drawRoundedRect(QRectF(7, 7, 10, 10), 2.5, 2.5)
+        elif name == "arrowDown":
+            p.drawLine(12, 5, 12, 19)
+            p.drawLine(6.4, 13.4, 12, 19)
+            p.drawLine(17.6, 13.4, 12, 19)
         p.end()
         result.addPixmap(pixmap, mode)
+    return result
+
+
+def _paint_glyph(p, name):
+    """24×24 坐标系下的线条图标；调用方负责缩放、描边颜色与粗细。"""
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QPolygonF
+    if name == "hub":
+        # 总管：中心节点 + 四向连接（派活/协调）
+        p.drawEllipse(QRectF(9.4, 9.4, 5.2, 5.2))
+        for cx, cy in ((5, 5), (19, 5), (5, 19), (19, 19)):
+            p.drawEllipse(QRectF(cx - 2.0, cy - 2.0, 4.0, 4.0))
+        for x1, y1, x2, y2 in ((13.9, 13.9, 17.4, 17.4), (10.1, 13.9, 6.6, 17.4),
+                               (13.9, 10.1, 17.4, 6.6), (10.1, 10.1, 6.6, 6.6)):
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+    elif name == "database":
+        # 数据管家：数据库柱体
+        p.drawEllipse(QRectF(5, 3.5, 14, 5.6))
+        p.drawLine(QPointF(5, 6.3), QPointF(5, 18.0))
+        p.drawLine(QPointF(19, 6.3), QPointF(19, 18.0))
+        p.drawArc(QRectF(5, 6.0, 14, 5.6), 0, -180 * 16)
+        p.drawArc(QRectF(5, 14.4, 14, 5.6), 0, -180 * 16)
+    elif name == "focus":
+        # 受众分析师：同心环（追踪/洞察人群）
+        p.drawEllipse(QRectF(2.8, 2.8, 18.4, 18.4))
+        p.drawEllipse(QRectF(6.2, 6.2, 11.6, 11.6))
+        p.drawEllipse(QRectF(9.6, 9.6, 4.8, 4.8))
+    elif name == "video":
+        # 内容分析师：屏幕 + 播放键
+        p.drawRoundedRect(QRectF(3.5, 4.5, 17, 12.6), 2, 2)
+        p.drawPolygon(QPolygonF([QPointF(10.2, 7.8), QPointF(10.2, 13.8), QPointF(15.2, 10.8)]))
+        p.drawLine(QPointF(12, 17.1), QPointF(12, 20.4))
+        p.drawLine(QPointF(9, 20.4), QPointF(15, 20.4))
+    elif name == "target":
+        # 传播策略师：靶心（定位/策略）
+        p.drawEllipse(QRectF(3.5, 3.5, 17, 17))
+        p.drawEllipse(QRectF(7.4, 7.4, 9.2, 9.2))
+        p.setBrush(QColor("#FFFFFF"))
+        p.drawEllipse(QRectF(10.8, 10.8, 2.4, 2.4))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+    elif name == "history":
+        # 复盘顾问：时钟回看
+        p.drawEllipse(QRectF(5, 5, 14, 14))
+        p.drawLine(QPointF(12, 12), QPointF(12, 7.4))
+        p.drawLine(QPointF(12, 12), QPointF(8.6, 13.8))
+
+
+def agent_badge(color, icon_name, size=34):
+    """发言人徽标：色底圆 + 白色矢量图标（不使用字体符号或表情）。"""
+    pixmap = QPixmap(size * 2, size * 2)
+    pixmap.setDevicePixelRatio(2)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pixmap)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(QColor(color))
+    p.drawEllipse(QRectF(0.5, 0.5, size - 1, size - 1))
+    glyph = size * 0.60
+    p.translate((size - glyph) / 2, (size - glyph) / 2)
+    p.scale(glyph / 24, glyph / 24)
+    p.setPen(QPen(QColor("#FFFFFF"), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    _paint_glyph(p, icon_name)
+    p.end()
+    result = QIcon()
+    result.addPixmap(pixmap)
     return result

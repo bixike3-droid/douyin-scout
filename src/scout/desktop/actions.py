@@ -194,7 +194,8 @@ async def execute(paths, kind, emit, options=None):
             from ..llm import DeepSeekClient
             options = options or {}
             return await send(ctx, DeepSeekClient(ctx.config.llm), options.get("request", ""),
-                conversation_id=options.get("conversation_id"), want_plan=bool(options.get("want_plan")), emit=emit)
+                conversation_id=options.get("conversation_id"), want_plan=bool(options.get("want_plan")),
+                emit=emit, agent_id=options.get("agent"))
         if kind == "enterprise":
             from ..analyze.enterprise import generate
             from ..llm import DeepSeekClient

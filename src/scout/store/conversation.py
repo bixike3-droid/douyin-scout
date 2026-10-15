@@ -22,12 +22,12 @@ class Conversations:
     def recent(self):
         return self.db.rows_as_dicts("SELECT id,title,created_at,updated_at,report_id FROM conversations ORDER BY updated_at DESC,id DESC LIMIT 100")
 
-    def add(self, conversation_id, role, content, *, status="complete", reply=None, input_json="{}", reasoning=""):
+    def add(self, conversation_id, role, content, *, status="complete", reply=None, input_json="{}", reasoning="", agent=""):
         self.get(conversation_id)
-        cur = self.db.conn.execute("INSERT INTO conversation_messages(conversation_id,role,content,status,created_at,model,prompt_tokens,completion_tokens,duration_ms,input_json,reasoning) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+        cur = self.db.conn.execute("INSERT INTO conversation_messages(conversation_id,role,content,status,created_at,model,prompt_tokens,completion_tokens,duration_ms,input_json,reasoning,agent) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
             (conversation_id, role, content, status, iso(), reply.model if reply else "",
              reply.prompt_tokens if reply else 0, reply.completion_tokens if reply else 0,
-             reply.duration_ms if reply else 0, input_json, reasoning))
+             reply.duration_ms if reply else 0, input_json, reasoning, agent))
         self.db.execute("UPDATE conversations SET updated_at=? WHERE id=?", (iso(), conversation_id))
         return cur.lastrowid
 

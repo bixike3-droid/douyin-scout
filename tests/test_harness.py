@@ -102,6 +102,54 @@ def test_forms_and_custom_window_controls_close_with_application(qt_app, ctx):
     assert not window.isVisible() and not window.enterprise.forms_dialog.isVisible()
 
 
+def test_team_bar_lists_members_without_manual_picking(qt_app):
+    from PySide6.QtWidgets import QLabel, QPushButton
+    from scout.analyze.agents import TEAM
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        labels = [label.text() for label in pane.agent_bar.findChildren(QLabel)]
+        for member in TEAM:
+            assert member.name in labels
+        # 派单由团队自动完成：界面上没有“选人”控件。
+        assert not pane.agent_bar.findChildren(QPushButton)
+        assert pane.ai_speaker.text() == "源镜"
+        assert "你好，我是源镜" in pane.assistant_bubble.text()
+    finally:
+        pane.deleteLater()
+
+
+def test_suggestion_chip_sends_as_task_request(qt_app):
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        sent = []
+        pane.task_requested.connect(lambda request, force: sent.append((request, force)))
+        suggestion = pane.suggestion_buttons[0].text()
+        pane.suggestion_buttons[0].click()
+        assert sent == [(suggestion, False)]
+    finally:
+        pane.deleteLater()
+
+
+def test_message_header_shows_agent_name(qt_app):
+    from PySide6.QtWidgets import QLabel
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        container = pane._message_widgets({"role": "assistant", "content": "你好", "status": "complete", "agent": "audience"})[0]
+        labels = [label.text() for label in container.findChildren(QLabel)]
+        assert "受众分析师" in labels
+        container = pane._message_widgets({"role": "user", "content": "提问", "status": "complete", "agent": ""})[0]
+        labels = [label.text() for label in container.findChildren(QLabel)]
+        assert "你" in labels
+        container = pane._message_widgets({"role": "assistant", "content": "历史消息", "status": "complete", "agent": ""})[0]
+        labels = [label.text() for label in container.findChildren(QLabel)]
+        assert "源镜" in labels
+    finally:
+        pane.deleteLater()
+
+
 def test_reasoning_panel_is_collapsed_until_clicked(qt_app):
     from scout.desktop.harness import ReasoningPanel
     panel = ReasoningPanel("第一步推理。\n第二步推理。", running=False)

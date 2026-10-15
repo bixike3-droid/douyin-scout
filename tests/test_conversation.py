@@ -95,3 +95,37 @@ def test_thinking_deltas_reach_the_ui_and_reasoning_is_persisted(ctx):
     assert any(e.get("type") == "answering" for e in events)
     assistant = result["conversation"]["messages"][-1]
     assert assistant["role"] == "assistant" and assistant["reasoning"] == "先核对资料。再回答。"
+
+
+def test_forced_agent_replies_and_is_persisted(ctx):
+    client = ChatClient()
+    result = asyncio.run(send(ctx, client, "谁在点赞？", agent_id="audience"))
+    system = client.calls[0][0]
+    assert "受众分析师" in system and "本次指定" in system
+    messages = result["conversation"]["messages"]
+    assert messages[0]["agent"] == "" and messages[-1]["agent"] == "audience"
+
+
+def test_unknown_forced_agent_falls_back_to_steward(ctx):
+    client = ChatClient()
+    result = asyncio.run(send(ctx, client, "你好", agent_id="不存在的角色"))
+    assert result["conversation"]["messages"][-1]["agent"] == "steward"
+
+
+def test_team_auto_dispatches_to_the_right_member(ctx):
+    class DispatchClient:
+        async def chat(self, system, user, **kwargs):
+            assert "自动派单" in system and "数据管家" in system and "复盘顾问" in system
+            return LLMReply(text=json.dumps({"speaker": "data", "reply": "我去把点赞人取回来。", "plan": None}, ensure_ascii=False),
+                            model="dispatch-test")
+    result = asyncio.run(send(ctx, DispatchClient(), "把最新的点赞人取回来"))
+    messages = result["conversation"]["messages"]
+    assert messages[0]["agent"] == "" and messages[-1]["agent"] == "data"
+
+
+def test_unknown_speaker_falls_back_to_steward(ctx):
+    class WeirdClient:
+        async def chat(self, system, user, **kwargs):
+            return LLMReply(text=json.dumps({"speaker": "ghost", "reply": "你好", "plan": None}, ensure_ascii=False), model="x")
+    result = asyncio.run(send(ctx, WeirdClient(), "在吗"))
+    assert result["conversation"]["messages"][-1]["agent"] == "steward"
