@@ -1361,21 +1361,22 @@ class TitleBar(QWidget):
     def add_controls(self):
         controls = QWidget()
         row = QHBoxLayout(controls)
-        row.setContentsMargins(3, 0, 12, 0)
-        row.setSpacing(8)
-        for title, name, identifier, action in (("×", "关闭", "windowClose", self.owner.close),
-                                               ("−", "最小化", "windowMinimize", self.owner.showMinimized),
-                                               ("+", "最大化或还原", "windowMaximize", self.toggle_maximized)):
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(4)
+        for title, name, identifier, action in (("—", "最小化", "windowControl", self.owner.showMinimized),
+                                               ("□", "最大化或还原", "windowControl", self.toggle_maximized),
+                                               ("×", "关闭", "closeControl", self.owner.close)):
             button = QPushButton(title)
             button.setObjectName(identifier)
-            button.setFixedSize(14, 14)
+            button.setFixedSize(44, 46)
             button.setToolTip(name)
             button.setAccessibleName(name)
             button.clicked.connect(action)
             row.addWidget(button)
-        self.row.insertWidget(0, controls)
+        self.row.addWidget(controls)
 
     def toggle_maximized(self):
+        """最大化 / 还原瞬时交给系统；平滑过渡由系统的最小化/还原动画承担。"""
         self.owner.showNormal() if self.owner.isMaximized() else self.owner.showMaximized()
 
     def mousePressEvent(self, event):

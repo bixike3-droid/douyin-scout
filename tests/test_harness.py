@@ -98,12 +98,57 @@ def test_forms_and_custom_window_controls_close_with_application(qt_app, ctx):
     window.enterprise.open_forms(0)
     assert window.nav.currentRow() == 5
     assert window.settings_tabs.currentIndex() == 1
+    original = window.geometry()
     window.title_bar.toggle_maximized()
     assert window.isMaximized()
     window.title_bar.toggle_maximized()
     assert not window.isMaximized()
+    assert window.geometry() == original  # 还原回小窗尺寸，而不是停在最大化矩形
     window.close()
     pump(qt_app, lambda: not window.isVisible())
+
+
+def test_window_controls_are_standard_visible_buttons(qt_app, ctx):
+    """窗口键固定在标题栏右侧：最小化 / 最大化 / 关闭，尺寸与文字保持可见。"""
+    from PySide6.QtWidgets import QPushButton
+    from scout.desktop.window import MainWindow
+    window = MainWindow(DesktopService(ctx.paths))
+    window.show()
+    try:
+        pump(qt_app, lambda: window.initialized and settled(window))
+        bar = window.title_bar
+        controls = bar.findChildren(QPushButton, "windowControl")
+        close_button = bar.findChild(QPushButton, "closeControl")
+        assert len(controls) == 2 and close_button is not None
+        assert [button.text() for button in controls] == ["—", "□"]
+        assert close_button.text() == "×"
+        for button in (*controls, close_button):
+            assert button.isVisible() and button.toolTip()
+            assert button.width() >= 40 and button.height() >= 40  # 不再是缩水的小圆点
+        center = close_button.mapTo(bar, close_button.rect().center())
+        assert center.x() > bar.width() / 2  # 三键固定在右端标准位置
+    finally:
+        window.close()
+        pump(qt_app, lambda: not window.isVisible())
+
+
+def test_window_edge_hit_returns_resize_edges(qt_app, ctx):
+    """窗口边缘 6px 是缩放带：命中返回对应边，中央不命中。"""
+    from PySide6.QtCore import QPoint, Qt
+    from scout.desktop.window import MainWindow
+    window = MainWindow(DesktopService(ctx.paths))
+    window.show()
+    try:
+        pump(qt_app, lambda: window.initialized and settled(window))
+        top_left = window.mapToGlobal(QPoint(1, 1))
+        assert window._hit_edges(top_left) == (Qt.Edge.LeftEdge | Qt.Edge.TopEdge)
+        right_mid = window.mapToGlobal(QPoint(window.width() - 2, window.height() // 2))
+        assert window._hit_edges(right_mid) == Qt.Edge.RightEdge
+        center = window.mapToGlobal(QPoint(window.width() // 2, window.height() // 2))
+        assert window._hit_edges(center) is None
+    finally:
+        window.close()
+        pump(qt_app, lambda: not window.isVisible())
 
 
 def test_team_bar_lists_members_without_manual_picking(qt_app):

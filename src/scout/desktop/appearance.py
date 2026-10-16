@@ -93,11 +93,11 @@ QPushButton#linkButton:hover { color: $accent_hover; }
 QPushButton#toolbarButton { background: transparent; border: none; border-radius: 7px; padding: 5px; }
 QPushButton#toolbarButton:hover { background: $hover; }
 QPushButton#appearanceToggle { background: $subtle; border: 1px solid $border; border-radius: 7px; padding: 4px 10px; font-size: 12px; }
-QPushButton#windowClose, QPushButton#windowMinimize, QPushButton#windowMaximize { border: 1px solid $border; border-radius: 7px; padding: 0; color: transparent; font-size: 12px; }
-QPushButton#windowClose { background: #FF6058; border-color: #E34F48; }
-QPushButton#windowMinimize { background: #FEBD2E; border-color: #DEAA27; }
-QPushButton#windowMaximize { background: #28C840; border-color: #26AA36; }
-QPushButton#windowClose:hover, QPushButton#windowMinimize:hover, QPushButton#windowMaximize:hover { color: #4A4241; }
+QPushButton#windowControl, QPushButton#closeControl { background: transparent; border: none; border-radius: 7px; padding: 0; color: $muted; font-size: 15px; }
+QPushButton#windowControl:hover { background: $hover; color: $text; }
+QPushButton#windowControl:pressed { background: $pressed; color: $text; }
+QPushButton#closeControl:hover { background: #C42B1C; color: #FFFFFF; }
+QPushButton#closeControl:pressed { background: #A62416; color: #FFFFFF; }
 QFrame#card, QFrame#detailCard { background: $surface; border: 1px solid $border; border-radius: 12px; }
 QWidget#conversationPane, QWidget#conversationBody { background: $surface; }
 QWidget#resultPane { background: $toolbar; border-left: 1px solid $border; }

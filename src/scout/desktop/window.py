@@ -321,7 +321,14 @@ class MainWindow(QMainWindow):
         self.start_enterprise_after_save = None
         self.motion_enabled = self.ui_preferences.value("motionEnabled", True, type=bool)
         self.conversation_to_load = self.ui_preferences.value("lastConversation", 0, type=int) or None
+        # 边缘缩放过滤器只在真实的 Windows 原生窗口上启用；离屏/测试平台没有原生窗口，
+        # 系统缩放/光标调用会连带影响 Qt 状态（测试中出现过 QLabel 构造级联失败）。
+        self._resize_filter_active = (sys.platform == "win32"
+                                      and QApplication.instance() is not None
+                                      and QApplication.instance().platformName() == "windows")
         self._build()
+        if self._resize_filter_active:
+            QApplication.instance().installEventFilter(self)
         QTimer.singleShot(0, self.refresh)
 
     def _build(self):
@@ -1167,13 +1174,17 @@ class MainWindow(QMainWindow):
             self._apply_native_frame()
 
     def _apply_native_frame(self):
-        """Windows：补回 WS_CAPTION | WS_THICKFRAME，交出边缘缩放与系统阴影。
+        """Windows：补回 WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX。
 
-        无边框窗口（FramelessWindowHint）会连同这两个样式一起移除，
-        导致只能靠状态栏角落的 QSizeGrip 缩放、而且没有系统阴影。
-        恢复样式后，边缘/角落拖拽缩放、缩放光标、贴边分屏都交回系统处理；
-        nativeEvent 里的 WM_NCCALCSIZE 返回 0，保证客户区仍是整个窗口矩形，
-        界面不会因此多出边框。非 Windows 平台保留 QSizeGrip 兜底。
+        无边框窗口（FramelessWindowHint）会连同这些样式一起移除：没有
+        最小化 / 最大化标记时，系统连最小化、还原的过渡动画都不会提供，
+        缩放也只能靠状态栏角落的 QSizeGrip、而且没有系统阴影。
+        恢复样式后，边缘/角落拖拽缩放、缩放光标、贴边分屏、最小化与还原
+        动画都交回系统处理；nativeEvent 里的 WM_NCCALCSIZE 返回 0，保证
+        客户区仍是整个窗口矩形，界面不会因此多出边框。
+        最后向 Windows 11 请求标准窗口圆角（DWMWA_WINDOW_CORNER_PREFERENCE，
+        最大化时系统自动切直角），旧系统不认识该属性，返回错误码即可忽略。
+        非 Windows 平台保留 QSizeGrip 兜底。
         """
         if sys.platform != "win32":
             return
@@ -1183,12 +1194,18 @@ class MainWindow(QMainWindow):
             user32 = ctypes.windll.user32
             gwl_style = -16
             ws_caption, ws_thickframe = 0x00C00000, 0x00040000
+            ws_minimizebox, ws_maximizebox = 0x00020000, 0x00010000
             style = user32.GetWindowLongW(hwnd, gwl_style)
-            user32.SetWindowLongW(hwnd, gwl_style, style | ws_caption | ws_thickframe)
+            user32.SetWindowLongW(hwnd, gwl_style,
+                                  style | ws_caption | ws_thickframe | ws_minimizebox | ws_maximizebox)
             # 让系统按新样式重算窗口框架：不移动/不改尺寸/不换层/不激活。
             swp_nosize, swp_nomove, swp_nozorder, swp_noactivate, swp_framechanged = 0x0001, 0x0002, 0x0004, 0x0010, 0x0020
             user32.SetWindowPos(hwnd, None, 0, 0, 0, 0,
                                 swp_nosize | swp_nomove | swp_nozorder | swp_noactivate | swp_framechanged)
+            # Windows 11 圆角：2 = DWMWCP_ROUND（系统标准半径）。
+            preference = ctypes.c_int(2)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, 33, ctypes.byref(preference), ctypes.sizeof(preference))
         except Exception:
             pass
 
@@ -1200,9 +1217,116 @@ class MainWindow(QMainWindow):
                 if msg.message == 0x0083 and msg.wParam:  # WM_NCCALCSIZE（wParam=TRUE）
                     # 客户区 = 整个窗口矩形；补回的框架样式不缩小界面，也不产生可见标题栏。
                     return True, 0
+                if msg.message == 0x0084 and not (self.isMaximized() or self.isFullScreen()):
+                    # WM_NCHITTEST：客户区铺满整窗口后，边缘缩放命中要自己交回系统。
+                    code = self._resize_hit(ctypes.c_short(msg.lParam & 0xFFFF).value,
+                                            ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value)
+                    if code:
+                        return True, code
             except Exception:
                 pass
         return super().nativeEvent(eventType, message)
+
+    def _resize_hit(self, screen_x, screen_y):
+        """WM_NCHITTEST 通道：把屏幕物理坐标换成 Win32 命中码，不在边缘返回 None。"""
+        from PySide6.QtCore import QPoint
+        ratio = self.devicePixelRatioF() or 1.0
+        edges = self._hit_edges(QPoint(round(screen_x / ratio), round(screen_y / ratio)))
+        if edges is None:
+            return None
+        if edges & Qt.Edge.LeftEdge and edges & Qt.Edge.TopEdge:
+            return 13  # HTTOPLEFT
+        if edges & Qt.Edge.RightEdge and edges & Qt.Edge.TopEdge:
+            return 14  # HTTOPRIGHT
+        if edges & Qt.Edge.LeftEdge and edges & Qt.Edge.BottomEdge:
+            return 16  # HTBOTTOMLEFT
+        if edges & Qt.Edge.RightEdge and edges & Qt.Edge.BottomEdge:
+            return 17  # HTBOTTOMRIGHT
+        if edges & Qt.Edge.LeftEdge:
+            return 10  # HTLEFT
+        if edges & Qt.Edge.RightEdge:
+            return 11  # HTRIGHT
+        if edges & Qt.Edge.TopEdge:
+            return 12  # HTTOP
+        return 15  # HTBOTTOM
+
+    def _hit_edges(self, global_pos):
+        """全局逻辑坐标是否落在窗口边缘缩放带（6px）；命中返回 Qt.Edge 组合，否则 None。"""
+        if self.isMaximized() or self.isFullScreen():
+            return None
+        pos = self.mapFromGlobal(global_pos)
+        border = 6
+        left = pos.x() < border
+        right = pos.x() >= self.width() - border
+        top = pos.y() < border
+        bottom = pos.y() >= self.height() - border
+        if left and top:
+            return Qt.Edge.LeftEdge | Qt.Edge.TopEdge
+        if right and top:
+            return Qt.Edge.RightEdge | Qt.Edge.TopEdge
+        if left and bottom:
+            return Qt.Edge.LeftEdge | Qt.Edge.BottomEdge
+        if right and bottom:
+            return Qt.Edge.RightEdge | Qt.Edge.BottomEdge
+        if left:
+            return Qt.Edge.LeftEdge
+        if right:
+            return Qt.Edge.RightEdge
+        if top:
+            return Qt.Edge.TopEdge
+        if bottom:
+            return Qt.Edge.BottomEdge
+        return None
+
+    def eventFilter(self, watched, event):
+        """鼠标靠近窗口边缘时给缩放光标，按下就交给系统开始缩放。
+
+        无边框窗口客户区铺满整窗，系统自带的边缘命中被绕开；
+        这里用 Qt 官方的 startSystemResize 作为原生命中通道之外的保险。
+        """
+        if getattr(self, "_resize_filter_active", False) and not self.closing:
+            kind = event.type()
+            if kind in (QEvent.Type.MouseMove, QEvent.Type.MouseButtonPress, QEvent.Type.Leave):
+                widget = watched if isinstance(watched, QWidget) else None
+                if widget is not None and widget.window() is self:
+                    if kind is QEvent.Type.Leave or self.isMaximized() or self.isFullScreen():
+                        self._clear_edge_cursor()
+                    else:
+                        edges = self._hit_edges(event.globalPosition().toPoint())
+                        if edges is None:
+                            self._clear_edge_cursor()
+                        elif kind is QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+                            self.windowHandle().startSystemResize(edges)
+                            return True
+                        else:
+                            self._set_edge_cursor(widget, edges)
+        return super().eventFilter(watched, event)
+
+    def _set_edge_cursor(self, widget, edges):
+        left = bool(edges & Qt.Edge.LeftEdge)
+        right = bool(edges & Qt.Edge.RightEdge)
+        top = bool(edges & Qt.Edge.TopEdge)
+        bottom = bool(edges & Qt.Edge.BottomEdge)
+        if (left and top) or (right and bottom):
+            shape = Qt.CursorShape.SizeFDiagCursor
+        elif (right and top) or (left and bottom):
+            shape = Qt.CursorShape.SizeBDiagCursor
+        elif left or right:
+            shape = Qt.CursorShape.SizeHorCursor
+        else:
+            shape = Qt.CursorShape.SizeVerCursor
+        held = getattr(self, "_edge_cursor_widget", None)
+        if held is not None and held is not widget:
+            self._clear_edge_cursor()
+        self._edge_cursor_widget = widget
+        if widget.cursor().shape() != shape:
+            widget.setCursor(shape)
+
+    def _clear_edge_cursor(self):
+        held = getattr(self, "_edge_cursor_widget", None)
+        if held is not None:
+            held.unsetCursor()
+            self._edge_cursor_widget = None
 
     def closeEvent(self, event):
         if not self.closing and (self.enterprise.profile_dirty or self.enterprise.report_dirty):
