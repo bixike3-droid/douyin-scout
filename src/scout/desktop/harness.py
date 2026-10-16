@@ -703,6 +703,8 @@ class HarnessPage(EnterprisePage):
         main.addWidget(scroll, 1)
         composer_box = QFrame()
         composer_box.setObjectName("composerBox")
+        from .components import soft_shadow
+        soft_shadow(composer_box, blur=24, dy=3, alpha=40)
         box = QVBoxLayout(composer_box)
         box.setContentsMargins(14, 10, 14, 10)
         box.setSpacing(6)

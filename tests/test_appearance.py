@@ -93,7 +93,7 @@ def test_appearance_preference_survives_restart_and_icons_follow_palette(qt_app,
     try:
         pump(qt_app, lambda: restarted.initialized and settled(restarted))
         assert restarted.appearance_mode == "dark"
-        assert restarted.appearance_combo.count() == 2 and restarted.appearance_combo.currentData() == "dark"
+        assert restarted.appearance_combo.count() == 3 and restarted.appearance_combo.currentData() == "dark"
     finally:
         restarted.close()
         pump(qt_app, lambda: not restarted.isVisible())

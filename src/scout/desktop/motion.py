@@ -108,7 +108,7 @@ class Disclosure(QFrame):
         self._finished()
 
 
-def fade_in(widget, enabled):
+def fade_in(widget, enabled, start=0.35, duration=170):
     previous = getattr(widget, "_fade", None)
     if previous:
         previous.stop()
@@ -120,9 +120,9 @@ def fade_in(widget, enabled):
         effect = QGraphicsOpacityEffect(widget)
         widget.setGraphicsEffect(effect)
     animation = QPropertyAnimation(effect, b"opacity", widget)
-    animation.setStartValue(0.35)
+    animation.setStartValue(start)
     animation.setEndValue(1.0)
-    animation.setDuration(170)
+    animation.setDuration(duration)
     animation.setEasingCurve(QEasingCurve.Type.OutCubic)
     widget._fade = animation
     animation.finished.connect(lambda: widget.setGraphicsEffect(None) if widget.graphicsEffect() is effect else None)

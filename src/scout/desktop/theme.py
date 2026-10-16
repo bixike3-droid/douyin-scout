@@ -53,7 +53,7 @@ def apply_theme(app, mode="light"):
 
 def _render_icon(name, color, size=22):
     result = QIcon()
-    for mode, shade in ((QIcon.Mode.Normal, color), (QIcon.Mode.Selected, "#FFFFFF")):
+    for mode, shade in ((QIcon.Mode.Normal, color), (QIcon.Mode.Selected, THEMES[theme_name()]["accent"])):
         pixmap = QPixmap(size * 2, size * 2)
         pixmap.setDevicePixelRatio(2)
         pixmap.fill(Qt.GlobalColor.transparent)

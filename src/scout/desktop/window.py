@@ -152,11 +152,11 @@ class RecordsPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
+        self.table.setAlternatingRowColors(False)
         self.table.setShowGrid(False)
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(46)
-        self.table.horizontalHeader().setFixedHeight(44)
+        self.table.verticalHeader().setDefaultSectionSize(38)
+        self.table.horizontalHeader().setFixedHeight(36)
         self.table.horizontalHeader().setMinimumSectionSize(60)
         self.table.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         stretch_key = {"works": "description", "users": "nickname", "analyses": "input_summary", "tasks": "target"}[key]
@@ -310,9 +310,14 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.service = service
         self.ui_preferences = QSettings(str(service.paths.root / "desktop-ui.ini"), QSettings.Format.IniFormat)
-        appearance = self.ui_preferences.value("appearance", "light")
-        self.appearance_mode = appearance if appearance in THEMES else "light"
+        appearance = str(self.ui_preferences.value("appearance", "light"))
+        self.appearance_pref = appearance if appearance in ("light", "dark", "auto") else "light"
+        self.appearance_mode = self._system_appearance() if self.appearance_pref == "auto" else self.appearance_pref
         apply_theme(QApplication.instance(), self.appearance_mode)
+        try:
+            QApplication.instance().styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
+        except Exception:
+            pass
         self.initialized = False
         self.pending = False
         self.closing = False
@@ -375,7 +380,7 @@ class MainWindow(QMainWindow):
         root_layout.setSpacing(0)
         self.title_bar = TitleBar(self)
         self.title_bar.brand.clicked.connect(about.trigger)
-        self.connection_state = text("登录未保存", "muted")
+        self.connection_state = text("登录未保存", "statusChip")
         self.connection_state.setWordWrap(False)
         self.title_bar.row.addWidget(self.connection_state)
         folder_button = QPushButton()
@@ -395,10 +400,12 @@ class MainWindow(QMainWindow):
         self.refresh_button.clicked.connect(self.refresh)
         self.title_bar.row.addWidget(self.refresh_button)
         self.login_button = QPushButton("登录抖音")
+        self.login_button.setObjectName("toolbarAccent")
         self.login_button.setIcon(icon("users", size=18))
         self.login_button.clicked.connect(lambda: self._start_operation("login"))
         self.title_bar.row.addWidget(self.login_button)
-        self.appearance_button = QPushButton("浅色" if self.appearance_mode == "light" else "深色")
+        appearance_labels = {"light": "浅色", "dark": "深色", "auto": "自动"}
+        self.appearance_button = QPushButton(appearance_labels.get(self.appearance_pref, "浅色"))
         self.appearance_button.setObjectName("appearanceToggle")
         self.appearance_button.setToolTip("切换明暗外观")
         self.appearance_button.setAccessibleName("切换明暗外观")
@@ -640,13 +647,14 @@ class MainWindow(QMainWindow):
         storage_card.setMaximumWidth(800)
         storage_layout.addWidget(text("作品、互动者与历史报告保存在本机。窗口顶部可登录抖音，任务记录中可启动采集，分析报告中可生成画像、评价和计划。", "muted"))
         layout.addWidget(storage_card)
-        appearance_card, appearance_layout = card("外观", "为整个工作空间选择明暗外观。")
+        appearance_card, appearance_layout = card("外观", "为整个工作空间选择明暗外观；跟随系统会随 Windows 主题自动切换。")
         appearance_card.setMaximumWidth(800)
         self.appearance_combo = QComboBox()
         self.appearance_combo.setAccessibleName("界面外观")
         self.appearance_combo.addItem("浅色", "light")
         self.appearance_combo.addItem("深色", "dark")
-        self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(self.appearance_mode))
+        self.appearance_combo.addItem("跟随系统", "auto")
+        self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(self.appearance_pref))
         self.appearance_combo.currentIndexChanged.connect(lambda index: self._set_appearance(self.appearance_combo.itemData(index)))
         appearance_layout.addWidget(self.appearance_combo)
         layout.addWidget(appearance_card)
@@ -1069,20 +1077,40 @@ class MainWindow(QMainWindow):
                 break
         self.recent_tasks.blockSignals(False)
 
+    def _system_appearance(self):
+        """跟随系统：Windows 深色主题返回 dark，其余（含未知）返回 light。"""
+        try:
+            scheme = QApplication.styleHints().colorScheme()
+        except Exception:
+            return "light"
+        return "dark" if scheme == Qt.ColorScheme.Dark else "light"
+
+    def _system_scheme_changed(self, *_args):
+        if getattr(self, "appearance_pref", "light") == "auto":
+            self._set_appearance("auto")
+
     def _set_appearance(self, mode):
-        if mode not in THEMES:
+        if mode not in ("light", "dark", "auto"):
             return
-        self.appearance_mode = mode
+        resolved = self._system_appearance() if mode == "auto" else mode
+        self.appearance_pref = mode
+        self.appearance_mode = resolved
         self.ui_preferences.setValue("appearance", mode)
-        apply_theme(QApplication.instance(), mode)
-        self.appearance_button.setText("浅色" if mode == "light" else "深色")
+        if QApplication.instance().property("scoutTheme") != resolved:
+            apply_theme(QApplication.instance(), resolved)
+            if self.isVisible():
+                fade_in(self, self.motion_enabled, start=0.7, duration=150)
+        labels = {"light": "浅色", "dark": "深色", "auto": "自动"}
+        self.appearance_button.setText(labels[mode])
+        self.appearance_button.setToolTip("切换明暗外观" if mode != "auto" else "跟随系统外观")
         self.appearance_combo.blockSignals(True)
         self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(mode))
         self.appearance_combo.blockSignals(False)
         for page in self.records.values():
             if page.model.rowCount():
                 page.model.dataChanged.emit(page.model.index(0, 0), page.model.index(page.model.rowCount() - 1, page.model.columnCount() - 1))
-        self.statusBar().showMessage("已切换为浅色外观" if mode == "light" else "已切换为深色外观", 3000)
+        names = {"light": "浅色", "dark": "深色", "auto": "自动（跟随系统）"}
+        self.statusBar().showMessage(f"已切换为{names[mode]}外观", 3000)
 
     def _set_motion(self, enabled):
         self.motion_enabled = enabled

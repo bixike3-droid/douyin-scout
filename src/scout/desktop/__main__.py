@@ -50,9 +50,6 @@ def main(default_root: Path | None = None) -> int:
             print(message, file=sys.stderr)
         return 1
     app = QApplication(sys.argv[:1])
-    if sys.platform == "win32":
-        from PySide6.QtGui import QFont
-        app.setFont(QFont("Microsoft YaHei UI", 10))
     app.setApplicationName("源镜")
     app.setApplicationDisplayName("源镜")
     app.setOrganizationName("源镜")

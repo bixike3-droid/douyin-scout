@@ -48,9 +48,23 @@ def text(value, style="", parent=None):
     return widget
 
 
+def soft_shadow(widget, blur=20, dy=2, alpha=34):
+    """统一的轻投影：卡片用层次感替代重描边。"""
+    from PySide6.QtGui import QColor
+    from PySide6.QtWidgets import QGraphicsDropShadowEffect
+    effect = QGraphicsDropShadowEffect(widget)
+    effect.setBlurRadius(blur)
+    effect.setOffset(0, dy)
+    shade = QColor(0, 0, 0)
+    shade.setAlpha(alpha)
+    effect.setColor(shade)
+    widget.setGraphicsEffect(effect)
+
+
 def card(title="", description=""):
     frame = QFrame()
     frame.setObjectName("card")
+    soft_shadow(frame)
     layout = QVBoxLayout(frame)
     layout.setContentsMargins(20, 18, 20, 18)
     layout.setSpacing(12)
@@ -65,6 +79,7 @@ class MetricCard(QFrame):
     def __init__(self, title, note, symbol):
         super().__init__()
         self.setObjectName("card")
+        soft_shadow(self)
         self.setMinimumHeight(136)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
