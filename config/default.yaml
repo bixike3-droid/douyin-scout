@@ -147,6 +147,18 @@ targets:
   quick_works_limit: 12
   works_per_user_limit: 60
   collection_ttl_hours: 24
+
+  # ── 互动名单抽样策略（点赞人 / 评论 / 粉丝）────────────────
+  # 体量小就全采，体量大按比例抽样并封顶 —— 防止爆款名单把请求量成倍放大。
+  #   总量 ≤ sampling_all_below   → 全采（如 10 条点赞 → 10 条全要）
+  #   更大                        → min(cap, max(floor, 总量×ratio))
+  #   例：50 赞 → 20 人；1 万评论 → 最多 100 条
+  # 未知体量按 floor 先探一层。三种组合玩法（抽样直采 / 全采后清洗 / 两者组合）
+  # 与实现见 docs/product.md「采集策略」与 src/scout/collect/sampling.py。
+  sampling_ratio: 0.4
+  sampling_floor: 20
+  sampling_cap: 100
+  sampling_all_below: 30
   home_url: "https://www.douyin.com"
   notice_url: "https://www.douyin.com/user/self?from_tab_name=main&showTab=post"
   notice_url_candidates:

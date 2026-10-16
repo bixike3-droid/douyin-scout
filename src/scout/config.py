@@ -291,6 +291,15 @@ class TargetsConfig:
     # 每轮最多刷新多少个作品的统计（防止一次跑太久）
     works_stats_refresh_limit: int = 60
 
+    # ── 互动名单抽样策略（点赞人 / 评论 / 粉丝）──
+    # 体量小全采，体量大按比例抽样并封顶（见 collect/sampling.py）：
+    # total ≤ all_below → 全采；否则 min(cap, max(floor, ceil(total×ratio)))。
+    # 例：10 → 10；50 → 20；10000 → 最多 100。未知体量先按 floor 探一层。
+    sampling_ratio: float = 0.4
+    sampling_floor: int = 20
+    sampling_cap: int = 100
+    sampling_all_below: int = 30
+
     def user_url(self, sec_uid: str) -> str:
         return self.user_url_template.format(sec_uid=sec_uid)
 

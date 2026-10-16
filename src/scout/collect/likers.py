@@ -12,6 +12,10 @@
 - 必须登录态（匿名返回 status_code=8「用户未登录」）
 
 所以"全部点赞人 + 每人主页"是一次接口调用就能拿全的，不用逐个访问主页。
+
+不过全量并不是默认行为 —— 采集预算按作品体量走（collect/sampling.py）：
+小名单全采；大名单按比例抽样并封顶（默认 50 赞 → 20 人，1 万赞 → 最多 100 人）。
+名单未触底（sampled）时不做"缺席即陈旧"标记，避免抽样误伤已有边。
 """
 
 from __future__ import annotations
@@ -21,6 +25,7 @@ from typing import Any
 from ..parse.registry import ParseResult
 from ..util import iso
 from .api_base import COMMON_PARAMS, ApiCollector
+from .sampling import budget_for
 
 API_BASE = "https://www.douyin.com/aweme/v1/web/favorite/list/?"
 
@@ -35,6 +40,18 @@ class LikersCollector(ApiCollector):
     def _page_size(self) -> int:
         # 接口硬上限 50，配置写大了会被拒
         return max(1, min(50, int(self.ctx.config.targets.likers_page_size)))
+
+    def max_items(self, task: dict[str, Any]) -> int:
+        """按作品点赞量给采集预算（见 collect/sampling.py）。
+
+        小体量全采；爆款按比例抽样并封顶 —— 之前"有赞就全量翻到触底"
+        会把每个大作品的请求量成倍放大。显式 `_item_limit` 优先。
+        """
+        explicit = int(task.get("_item_limit") or 0)
+        if explicit:
+            return explicit
+        work = self.ctx.works.get(str(task.get("target") or "")) or {}
+        return max(1, budget_for(self.ctx.config.targets, work.get("digg_count")))
 
     def api_url(self, target: str, cursor: int) -> str:
         return (
