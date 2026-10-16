@@ -170,6 +170,13 @@ def test_hot_topics_tolerates_missing_structure():
     assert hot._extract_words({"data": {"list": [{"sentence": "句子"}]}}) == [{"sentence": "句子"}]
 
 
+def test_hot_topics_owned_by_observer_and_strategy():
+    spec = registry.get("hot_topics")
+    assert spec.agents == ("observer", "strategy")
+    assert registry.allows(spec, "observer") and registry.allows(spec, "strategy")
+    assert not registry.allows(spec, "steward")
+
+
 def test_unknown_tool_rejected(ctx):
     result = asyncio.run(registry.execute(ctx, "not_a_tool", "steward", {}))
     assert result["ok"] is False

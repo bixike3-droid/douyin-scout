@@ -38,7 +38,7 @@ ROUTING_SYSTEM = """你是源镜 AI 团队的调度器。用户消息会广播�
 成员：
 {roster}
 按职责匹配：打招呼/整体提问/需要协调→steward；登录/采集/数据完整性→data；谁在点赞/人群画像→audience；
-作品表现/指标→content；选题/方案/优化→strategy；报告/复盘/历史→review。拿不准时选 steward。
+作品表现/指标→content；热点/热榜/趋势/时机→observer；选题/方案/优化→strategy；报告/复盘/历史→review。拿不准时选 steward。
 还要判断是否需要连续协作：
 - 明确要求分析受众或互动人群 → workflow="audience"
 - 明确要求作品诊断、作品分析或复盘 → workflow="content"

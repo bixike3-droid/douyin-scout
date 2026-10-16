@@ -166,7 +166,7 @@ def icon(name, color=None, size=22):
 def _paint_glyph(p, name):
     """24×24 坐标系下的线条图标；调用方负责缩放、描边颜色与粗细。"""
     from PySide6.QtCore import QPointF
-    from PySide6.QtGui import QPolygonF
+    from PySide6.QtGui import QPolygonF, QPainterPath
     if name == "hub":
         # 总管：中心节点 + 四向连接（派活/协调）
         p.drawEllipse(QRectF(9.4, 9.4, 5.2, 5.2))
@@ -205,6 +205,17 @@ def _paint_glyph(p, name):
         p.drawEllipse(QRectF(5, 5, 14, 14))
         p.drawLine(QPointF(12, 12), QPointF(12, 7.4))
         p.drawLine(QPointF(12, 12), QPointF(8.6, 13.8))
+    elif name == "flame":
+        # 热点观察员：火焰
+        path = QPainterPath()
+        path.moveTo(12.3, 3.0)
+        path.cubicTo(10.6, 7.2, 7.2, 9.2, 6.8, 13.4)
+        path.cubicTo(6.5, 17.3, 9.1, 20.6, 12.2, 20.6)
+        path.cubicTo(15.5, 20.6, 17.9, 17.6, 17.3, 13.7)
+        path.cubicTo(16.8, 10.7, 15.3, 9.3, 14.5, 6.6)
+        path.cubicTo(14.2, 8.7, 13.3, 10.0, 12.5, 10.5)
+        path.cubicTo(13.2, 8.1, 12.9, 5.4, 12.3, 3.0)
+        p.drawPath(path)
 
 
 def agent_badge(color, icon_name, size=34):
