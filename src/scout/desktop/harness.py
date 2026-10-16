@@ -1,10 +1,12 @@
 """Yuanjing's three-column task workspace, backed by the enterprise service."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QRect, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot
+import sys
+
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot
 from PySide6.QtGui import QTextBlockFormat, QTextCursor, QPixmap
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QPushButton, QPlainTextEdit,
-    QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel, QGraphicsBlurEffect)
+    QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel)
 from ..analyze.agents import DEFAULT_AGENT_ID, TEAM, get as get_agent
 from .enterprise import EnterprisePage, report_time
 from .components import text, ElidedLabel
@@ -1344,6 +1346,30 @@ class SafeMessageBrowser(QTextBrowser):
         return None
 
 
+def try_system_toggle(window) -> bool:
+    """在真实 Windows 窗口上把最大化 / 还原交给系统命令（DWM 原生缩放动画）。
+
+    与用户点系统最大化键同一条路径（WM_SYSCOMMAND → DefWindowProc）：
+    动画由 DWM 在合成层播放（缩放自带轻微模糊），应用层零逐帧重排；
+    系统关闭窗口动画时由 Windows 自行瞬时切换。
+    离屏 / 非 Windows 环境返回 False，由调用方走 Qt 回退。
+    """
+    if sys.platform != "win32":
+        return False
+    application = QApplication.instance()
+    if application is None or application.platformName() != "windows":
+        return False
+    try:
+        import ctypes
+        hwnd = int(window.winId())
+        # SC_RESTORE(0xF120) / SC_MAXIMIZE(0xF030)；WM_SYSCOMMAND(0x0112)
+        command = 0xF120 if window.isMaximized() else 0xF030
+        ctypes.windll.user32.PostMessageW(hwnd, 0x0112, command, 0)
+        return True
+    except Exception:
+        return False
+
+
 class TitleBar(QWidget):
     """Native system move and standard minimize/maximize/close controls."""
     def __init__(self, window):
@@ -1359,9 +1385,6 @@ class TitleBar(QWidget):
         self.brand.setIcon(icon("source", "#007AFF", 27))
         self.row.addWidget(self.brand)
         self.row.addStretch()
-        self._zoom_overlay = None
-        self._zoom_geo = None
-        self._zoom_blur = None
 
     def add_controls(self):
         controls = QWidget()
@@ -1380,64 +1403,17 @@ class TitleBar(QWidget):
             row.addWidget(button)
         self.row.addWidget(controls)
 
-    ZOOM_MS = 220
-
     def toggle_maximized(self):
-        """最大化 / 还原：快照缩放过渡 + 模糊渐清。
+        """最大化 / 还原：交给系统命令 → Windows 播放 DWM 原生缩放动画。
 
-        真实窗口状态瞬时切换（不再逐帧重排布局，避免此前「字会变 + 卡顿」），
-        过渡是一张旧界面快照在新窗口坐标系里缩放；模糊把文字重排的抽动
-        藏在过渡里，结束时无缝交还真实界面。关闭「交互动效」时保持瞬时切换。
+        与用户点系统最大化键同一条路径（双击标题栏、Snap 布局行为一致）；
+        DWM 在合成层完成缩放（自带轻微模糊），应用层零逐帧重排，不会卡顿。
+        系统「视觉效果」里关闭动画时，Windows 会自动瞬时切换。
+        离屏 / 非 Windows 环境走 Qt 回退（瞬时）。
         """
-        window = self.owner
-        self._clear_zoom()
-        if not (getattr(window, "motion_enabled", True) and window.isVisible()):
-            window.showNormal() if window.isMaximized() else window.showMaximized()
+        if try_system_toggle(self.owner):
             return
-        snapshot = window.grab()
-        if snapshot.isNull():
-            window.showNormal() if window.isMaximized() else window.showMaximized()
-            return
-        start_global = window.geometry()
-        window.showNormal() if window.isMaximized() else window.showMaximized()
-        start = QRect(start_global.topLeft() - window.geometry().topLeft(), start_global.size())
-        target = QRect(0, 0, window.width(), window.height())
-        overlay = QLabel(window)
-        overlay.setScaledContents(True)
-        overlay.setPixmap(snapshot)
-        overlay.setGeometry(start)
-        overlay.raise_()
-        overlay.show()
-        blur = QGraphicsBlurEffect(overlay)
-        blur.setBlurRadius(12.0)
-        overlay.setGraphicsEffect(blur)
-        self._zoom_overlay = overlay
-        self._zoom_geo = QPropertyAnimation(overlay, b"geometry", self)
-        self._zoom_geo.setDuration(self.ZOOM_MS)
-        self._zoom_geo.setEasingCurve(QEasingCurve.Type.OutCubic)
-        self._zoom_geo.setStartValue(start)
-        self._zoom_geo.setEndValue(target)
-        self._zoom_blur = QPropertyAnimation(blur, b"blurRadius", self)
-        self._zoom_blur.setDuration(self.ZOOM_MS)
-        self._zoom_blur.setStartValue(12.0)
-        self._zoom_blur.setKeyValueAt(0.5, 6.0)
-        self._zoom_blur.setEndValue(0.0)
-        self._zoom_geo.finished.connect(self._clear_zoom)
-        self._zoom_geo.start()
-        self._zoom_blur.start()
-
-    def _clear_zoom(self, *_args):
-        for name in ("_zoom_geo", "_zoom_blur"):
-            animation = getattr(self, name, None)
-            if animation is not None:
-                animation.stop()
-        overlay = self._zoom_overlay
-        self._zoom_overlay = None
-        self._zoom_geo = None
-        self._zoom_blur = None
-        if overlay is not None:
-            overlay.hide()
-            overlay.deleteLater()
+        self.owner.showNormal() if self.owner.isMaximized() else self.owner.showMaximized()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.owner.windowHandle():

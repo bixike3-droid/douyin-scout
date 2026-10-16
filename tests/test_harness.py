@@ -151,23 +151,20 @@ def test_window_edge_hit_returns_resize_edges(qt_app, ctx):
         pump(qt_app, lambda: not window.isVisible())
 
 
-def test_maximize_uses_snapshot_transition_and_cleans_up(qt_app, ctx):
-    """最大化 / 还原：快照缩放过渡进行中挂有遮罩，动画结束清理干净。"""
+def test_maximize_toggle_prefers_system_command_only_on_real_windows(qt_app, ctx):
+    """离屏 / 测试环境不碰系统命令，回退为 Qt 瞬时切换；状态照常翻转。"""
+    from scout.desktop import harness
     from scout.desktop.window import MainWindow
     window = MainWindow(DesktopService(ctx.paths))
     window.show()
     try:
         pump(qt_app, lambda: window.initialized and settled(window))
-        bar = window.title_bar
-        assert bar._zoom_overlay is None
-        bar.toggle_maximized()
-        assert window.isMaximized()
-        assert bar._zoom_overlay is not None
-        pump(qt_app, lambda: bar._zoom_overlay is None)
-        bar.toggle_maximized()
+        assert harness.try_system_toggle(window) is False  # 离屏平台不调 ctypes
         assert not window.isMaximized()
-        assert bar._zoom_overlay is not None
-        pump(qt_app, lambda: bar._zoom_overlay is None)
+        window.title_bar.toggle_maximized()
+        assert window.isMaximized()
+        window.title_bar.toggle_maximized()
+        assert not window.isMaximized()
     finally:
         window.close()
         pump(qt_app, lambda: not window.isVisible())
