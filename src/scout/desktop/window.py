@@ -254,6 +254,22 @@ class RecordsPage(QWidget):
             "analyses": [],
         }
         lines.extend(f"{title}：{display_value(key, record.get(key))}" for title, key in extra[self.key])
+        links = record.get("links")
+        if isinstance(links, dict) and self.key in ("users", "works"):
+            items = links.get("items") or []
+            lines.append("")
+            if self.key == "users":
+                lines.append(f"互动作品：共 {links.get('total', 0)} 条，展示最近 {len(items)} 条")
+            else:
+                lines.append(f"已采点赞人：共 {links.get('total', 0)} 人，展示最近 {len(items)} 人")
+            for item in items:
+                if self.key == "users":
+                    title = item.get("label") or (f"作品 {item.get('id')}" if item.get("id") else "未关联作品")
+                else:
+                    title = item.get("label") or (str(item.get("id") or "")[:14] or "未知用户")
+                lines.append(f"· {display_value('discovered_at', item.get('at'))}　{title}")
+            if not items:
+                lines.append("· 暂无关联记录")
         if "output_json" in record:
             try:
                 output = json.loads(record["output_json"])

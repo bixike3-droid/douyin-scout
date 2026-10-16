@@ -39,12 +39,20 @@ async def _overview(ctx, args: dict) -> dict:
 
 
 def _row_line(view: str, row: dict) -> str:
+    links = row.get("links") or {}
     if view == "users":
-        return (f"- {row.get('nickname') or '（无昵称）'}｜互动作品 {row.get('interaction_works', 0)}｜"
+        line = (f"- {row.get('nickname') or '（无昵称）'}｜互动作品 {row.get('interaction_works', 0)}｜"
                 f"粉丝 {row.get('follower_count') or '未知'}｜资料 {row.get('data_status') or '未知'}")
+        names = [str(item.get("label"))[:14] for item in (links.get("items") or [])[:3] if item.get("label")]
+        if names:
+            line += "｜最近赞过：" + "、".join(names)
+        return line
     if view == "works":
-        return (f"- {str(row.get('description') or '（无标题）')[:40]}｜点赞 {row.get('digg_count', 0)}｜"
+        line = (f"- {str(row.get('description') or '（无标题）')[:40]}｜点赞 {row.get('digg_count', 0)}｜"
                 f"评论 {row.get('comment_count', 0)}｜发布 {row.get('create_time') or '未知'}")
+        if links:
+            line += f"｜已采点赞人 {links.get('total', 0)} 人"
+        return line
     if view == "tasks":
         state = STATE_NAMES.get(row.get("state"), row.get("state") or "")
         return (f"- {row.get('kind') or ''} {str(row.get('target') or '')[:30]}｜{state}｜"

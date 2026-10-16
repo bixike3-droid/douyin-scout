@@ -7,6 +7,7 @@ from .collection import Quality, clean_metrics
 from .enterprise import EnterpriseStore
 
 PAGE_SIZE = 100
+LINK_LIMIT = 12  # 详情面板每行展示的最大关联条目（互动作品 / 已采点赞人）
 VIEWS = {
     "works": ("works w", "w.is_mine=1", "w.description", "w.aweme_id", "w.create_time DESC, w.aweme_id"),
     "users": ("users u LEFT JOIN v_audience_quality q ON q.sec_uid=u.sec_uid", "EXISTS (SELECT 1 FROM like_edges le WHERE le.sec_uid=u.sec_uid)",
@@ -54,4 +55,44 @@ class DesktopStore:
             (pattern, pattern, PAGE_SIZE, page * PAGE_SIZE),
         )
         rendered = [EnterpriseStore(self.db).enrich(row) if view == "works" else clean_metrics(row) for row in rows]
+        if view in ("users", "works") and rendered:
+            self._attach_links(view, rendered)
         return {"rows": rendered, "total": total, "page": page, "page_size": PAGE_SIZE}
+
+    def _attach_links(self, view: str, rows: list[dict[str, Any]]) -> None:
+        """互动数据归口：每行带上对应的作品/用户，保证不散乱。
+
+        - users 行 → 这个互动者关联过哪些作品（最近若干条）
+        - works 行 → 这条作品采到过哪些点赞人（同一人从通知 / 覆盖层 / 接口
+          多条边进来只算一条）
+        关联条目挂不上作品（aweme_id 为空）时保留为「未关联作品」原样展示。
+        """
+        anchor, item = ("sec_uid", "aweme_id") if view == "users" else ("aweme_id", "sec_uid")
+        if view == "users":
+            joins, extra = "LEFT JOIN works w ON w.aweme_id = g.aweme_id", "w.description AS label"
+        else:
+            joins, extra = "LEFT JOIN users u ON u.sec_uid = g.sec_uid", "u.nickname AS label"
+        ids = [str(row.get(anchor) or "") for row in rows]
+        marks = ",".join("?" * len(ids))
+        totals = {row[anchor]: int(row["total"] or 0) for row in self.db.query(
+            f"SELECT {anchor}, COUNT(DISTINCT {item}) AS total FROM like_edges "
+            f"WHERE {anchor} IN ({marks}) GROUP BY {anchor}", ids)}
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for entry in self.db.query(
+            f"""
+            SELECT * FROM (
+                SELECT g.{anchor} AS anchor, g.{item} AS item, g.last_seen AS last_seen, {extra},
+                       ROW_NUMBER() OVER (PARTITION BY g.{anchor} ORDER BY g.last_seen DESC, g.{item}) AS rn
+                FROM (
+                    SELECT {anchor}, {item}, MAX(discovered_at) AS last_seen
+                    FROM like_edges WHERE {anchor} IN ({marks})
+                    GROUP BY {anchor}, {item}
+                ) g {joins}
+            ) WHERE rn <= ?
+            ORDER BY anchor, rn
+            """, (*ids, LINK_LIMIT)):
+            grouped.setdefault(str(entry["anchor"] or ""), []).append(
+                {"id": str(entry["item"] or ""), "at": entry["last_seen"], "label": entry["label"]})
+        for row in rows:
+            key = str(row.get(anchor) or "")
+            row["links"] = {"total": totals.get(key, 0), "items": grouped.get(key, [])}

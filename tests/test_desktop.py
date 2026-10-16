@@ -59,6 +59,45 @@ def test_desktop_queries_page_and_search_literal_text(ctx):
         store.page("untrusted-table")
 
 
+def test_records_scope_links_likes_to_their_work(ctx):
+    """互动数据按作品归口：人是互动作品列表，作品是已采点赞人列表。"""
+    ctx.works.upsert({"aweme_id": "w1", "description": "校园视频", "is_mine": 1, "digg_count": 30})
+    ctx.works.upsert({"aweme_id": "w2", "description": "食堂视频", "is_mine": 1, "digg_count": 5})
+    ctx.users.upsert({"sec_uid": "u1", "nickname": "观众甲"})
+    ctx.like_edges.add_many([
+        {"sec_uid": "u1", "aweme_id": "w1", "notice_id": "n1"},
+        {"sec_uid": "u1", "aweme_id": "w1", "notice_id": "api:w1"},  # 同一人同一作品：通知 + 接口
+        {"sec_uid": "u1", "aweme_id": "w2", "notice_id": "n2"},
+    ])
+    store = DesktopStore(ctx.db)
+    user = next(r for r in store.page("users")["rows"] if r["sec_uid"] == "u1")
+    assert user["links"]["total"] == 2
+    assert {i["id"] for i in user["links"]["items"]} == {"w1", "w2"}
+    assert {i["label"] for i in user["links"]["items"]} == {"校园视频", "食堂视频"}
+    work = next(r for r in store.page("works")["rows"] if r["aweme_id"] == "w1")
+    assert work["links"]["total"] == 1                 # 两条边只算一个人
+    assert work["links"]["items"][0]["label"] == "观众甲"
+
+
+def test_records_detail_shows_linked_records(qt_app, ctx):
+    """详情面板双向可查：互动者看到赞过的作品，作品看到点赞人。"""
+    from scout.desktop.window import RecordsPage
+    ctx.works.upsert({"aweme_id": "w1", "description": "校园视频", "is_mine": 1, "digg_count": 30})
+    ctx.users.upsert({"sec_uid": "u1", "nickname": "观众甲"})
+    ctx.like_edges.add_many([{"sec_uid": "u1", "aweme_id": "w1", "notice_id": "n1"}])
+    store = DesktopStore(ctx.db)
+    users_page = RecordsPage("users", lambda: None)
+    users_page.apply(store.page("users"))
+    users_page.table.selectRow(0)
+    text = users_page.detail.toPlainText()
+    assert "互动作品" in text and "校园视频" in text
+    works_page = RecordsPage("works", lambda: None)
+    works_page.apply(store.page("works"))
+    works_page.table.selectRow(0)
+    text = works_page.detail.toPlainText()
+    assert "已采点赞人" in text and "观众甲" in text
+
+
 def test_latest_analysis_is_unique_when_timestamps_tie(ctx):
     for digest in ("first", "second"):
         ctx.llm_results.save(subject_kind="user", subject_id="a", task="profile",
