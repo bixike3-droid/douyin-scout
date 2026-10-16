@@ -151,6 +151,28 @@ def test_window_edge_hit_returns_resize_edges(qt_app, ctx):
         pump(qt_app, lambda: not window.isVisible())
 
 
+def test_maximize_uses_snapshot_transition_and_cleans_up(qt_app, ctx):
+    """最大化 / 还原：快照缩放过渡进行中挂有遮罩，动画结束清理干净。"""
+    from scout.desktop.window import MainWindow
+    window = MainWindow(DesktopService(ctx.paths))
+    window.show()
+    try:
+        pump(qt_app, lambda: window.initialized and settled(window))
+        bar = window.title_bar
+        assert bar._zoom_overlay is None
+        bar.toggle_maximized()
+        assert window.isMaximized()
+        assert bar._zoom_overlay is not None
+        pump(qt_app, lambda: bar._zoom_overlay is None)
+        bar.toggle_maximized()
+        assert not window.isMaximized()
+        assert bar._zoom_overlay is not None
+        pump(qt_app, lambda: bar._zoom_overlay is None)
+    finally:
+        window.close()
+        pump(qt_app, lambda: not window.isVisible())
+
+
 def test_benchmark_page_lists_accounts_and_adds_from_link(qt_app, ctx):
     """第 6 个导航位是对标账号页：粘贴链接添加后出现在名单与详情里。"""
     from scout.desktop.window import MainWindow

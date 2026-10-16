@@ -1,10 +1,10 @@
 """Yuanjing's three-column task workspace, backed by the enterprise service."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot
+from PySide6.QtCore import Qt, QRect, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot
 from PySide6.QtGui import QTextBlockFormat, QTextCursor, QPixmap
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QPushButton, QPlainTextEdit,
-    QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel)
+    QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel, QGraphicsBlurEffect)
 from ..analyze.agents import DEFAULT_AGENT_ID, TEAM, get as get_agent
 from .enterprise import EnterprisePage, report_time
 from .components import text, ElidedLabel
@@ -1359,6 +1359,9 @@ class TitleBar(QWidget):
         self.brand.setIcon(icon("source", "#007AFF", 27))
         self.row.addWidget(self.brand)
         self.row.addStretch()
+        self._zoom_overlay = None
+        self._zoom_geo = None
+        self._zoom_blur = None
 
     def add_controls(self):
         controls = QWidget()
@@ -1377,9 +1380,64 @@ class TitleBar(QWidget):
             row.addWidget(button)
         self.row.addWidget(controls)
 
+    ZOOM_MS = 220
+
     def toggle_maximized(self):
-        """最大化 / 还原瞬时交给系统；平滑过渡由系统的最小化/还原动画承担。"""
-        self.owner.showNormal() if self.owner.isMaximized() else self.owner.showMaximized()
+        """最大化 / 还原：快照缩放过渡 + 模糊渐清。
+
+        真实窗口状态瞬时切换（不再逐帧重排布局，避免此前「字会变 + 卡顿」），
+        过渡是一张旧界面快照在新窗口坐标系里缩放；模糊把文字重排的抽动
+        藏在过渡里，结束时无缝交还真实界面。关闭「交互动效」时保持瞬时切换。
+        """
+        window = self.owner
+        self._clear_zoom()
+        if not (getattr(window, "motion_enabled", True) and window.isVisible()):
+            window.showNormal() if window.isMaximized() else window.showMaximized()
+            return
+        snapshot = window.grab()
+        if snapshot.isNull():
+            window.showNormal() if window.isMaximized() else window.showMaximized()
+            return
+        start_global = window.geometry()
+        window.showNormal() if window.isMaximized() else window.showMaximized()
+        start = QRect(start_global.topLeft() - window.geometry().topLeft(), start_global.size())
+        target = QRect(0, 0, window.width(), window.height())
+        overlay = QLabel(window)
+        overlay.setScaledContents(True)
+        overlay.setPixmap(snapshot)
+        overlay.setGeometry(start)
+        overlay.raise_()
+        overlay.show()
+        blur = QGraphicsBlurEffect(overlay)
+        blur.setBlurRadius(12.0)
+        overlay.setGraphicsEffect(blur)
+        self._zoom_overlay = overlay
+        self._zoom_geo = QPropertyAnimation(overlay, b"geometry", self)
+        self._zoom_geo.setDuration(self.ZOOM_MS)
+        self._zoom_geo.setEasingCurve(QEasingCurve.Type.OutCubic)
+        self._zoom_geo.setStartValue(start)
+        self._zoom_geo.setEndValue(target)
+        self._zoom_blur = QPropertyAnimation(blur, b"blurRadius", self)
+        self._zoom_blur.setDuration(self.ZOOM_MS)
+        self._zoom_blur.setStartValue(12.0)
+        self._zoom_blur.setKeyValueAt(0.5, 6.0)
+        self._zoom_blur.setEndValue(0.0)
+        self._zoom_geo.finished.connect(self._clear_zoom)
+        self._zoom_geo.start()
+        self._zoom_blur.start()
+
+    def _clear_zoom(self, *_args):
+        for name in ("_zoom_geo", "_zoom_blur"):
+            animation = getattr(self, name, None)
+            if animation is not None:
+                animation.stop()
+        overlay = self._zoom_overlay
+        self._zoom_overlay = None
+        self._zoom_geo = None
+        self._zoom_blur = None
+        if overlay is not None:
+            overlay.hide()
+            overlay.deleteLater()
 
     def mousePressEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton and self.owner.windowHandle():
