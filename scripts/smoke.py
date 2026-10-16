@@ -5,7 +5,7 @@
     python scripts/smoke.py
 
 它覆盖：迁移 → 幂等 upsert → 归档去重 → 配额 → 熔断 → 解析 → 分析 → 导出。
-不覆盖：浏览器、Web 面板（那两个需要 playwright / fastapi）。
+不覆盖：浏览器（需要 playwright）。
 """
 
 from __future__ import annotations
@@ -27,7 +27,6 @@ from scout.config import (  # noqa: E402
     StorageConfig,
     TargetsConfig,
     TierConfig,
-    WebConfig,
 )
 from scout.guard.circuit import CircuitBreaker, CircuitOpen  # noqa: E402
 from scout.guard.quota import QuotaExceeded  # noqa: E402
@@ -79,7 +78,6 @@ def main() -> int:
         browser=BrowserConfig(),
         storage=StorageConfig(),
         targets=TargetsConfig(notice_url="https://www.douyin.com/notification"),
-        web=WebConfig(),
     )
 
     print(f"\n自检临时目录：{tmp}")

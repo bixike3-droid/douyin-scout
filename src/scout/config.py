@@ -296,12 +296,6 @@ class TargetsConfig:
 
 
 @dataclass(frozen=True)
-class WebConfig:
-    host: str = "127.0.0.1"
-    port: int = 8787
-
-
-@dataclass(frozen=True)
 class LLMConfig:
     """大模型配置。
 
@@ -357,7 +351,6 @@ class Config:
     browser: BrowserConfig
     storage: StorageConfig
     targets: TargetsConfig
-    web: WebConfig
     # 声明式页面交互脚本：{"notice_expand": [{"action": "click_text", "text": "查看全部"}, ...]}
     # 放在这里而不是写死在代码里，是为了改版时只改 YAML。
     interactions: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -441,7 +434,6 @@ def load_config(paths: Paths | None = None, extra_files: list[Path] | None = Non
         browser=_build(BrowserConfig, merged.get("browser")),
         storage=_build(StorageConfig, merged.get("storage")),
         targets=_build(TargetsConfig, merged.get("targets")),
-        web=_build(WebConfig, merged.get("web")),
         interactions=dict(merged.get("interactions") or {}),
         llm=_build(LLMConfig, merged.get("llm")),
         search=_build(SearchConfig, merged.get("search")),

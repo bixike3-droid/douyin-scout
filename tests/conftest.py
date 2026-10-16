@@ -1,7 +1,7 @@
 """测试夹具。
 
 刻意只用标准库可跑的模块（config / db / store / guard / parse），
-不引入 playwright 或 fastapi —— 核心逻辑必须能在任何环境里被验证。
+不引入 playwright —— 核心逻辑必须能在任何环境里被验证。
 """
 
 from __future__ import annotations
@@ -20,7 +20,6 @@ from scout.config import (
     StorageConfig,
     TargetsConfig,
     TierConfig,
-    WebConfig,
 )
 from scout.paths import Paths
 
@@ -50,7 +49,6 @@ def config(paths):
         browser=BrowserConfig(),
         storage=StorageConfig(),
         targets=TargetsConfig(notice_url="https://www.douyin.com/notification"),
-        web=WebConfig(),
     )
 
 

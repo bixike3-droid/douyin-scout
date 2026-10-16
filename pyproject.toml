@@ -8,8 +8,6 @@ dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "PyYAML>=6.0",
-    "fastapi>=0.115",
-    "uvicorn>=0.30",
 ]
 
 [project.optional-dependencies]
@@ -27,7 +25,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-scout = ["db/migrations/*.sql", "web/static/*", "desktop/assets/*.ico"]
+scout = ["db/migrations/*.sql", "desktop/assets/*.ico"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

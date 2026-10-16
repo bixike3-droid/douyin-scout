@@ -140,7 +140,7 @@ def init() -> None:
             "配置来源": ", ".join(ctx.config.sources) or "（默认值）",
             "启用档位": ", ".join(ctx.config.enabled_tiers()),
         }))
-    console.print("\n下一步：`scout probe --help` 看怎么勘探，或 `scout web` 打开面板。")
+    console.print("\n下一步：`scout probe --help` 看怎么勘探。")
 
 
 @app.command("account")
@@ -290,8 +290,6 @@ def doctor() -> None:
         "typer": ("typer", "命令行"),
         "rich": ("rich", "终端输出"),
         "playwright": ("playwright", "浏览器（采集必需）"),
-        "fastapi": ("fastapi", "本地面板"),
-        "uvicorn": ("uvicorn", "本地面板"),
         "pytest": ("pytest", "测试（可选）"),
     }
     missing: list[str] = []
@@ -1323,30 +1321,6 @@ def quota_set(
         snap = ctx.quota.snapshot()
     console.print(f"[green]{tier} 今日用量已设为 {used}[/]")
     console.print(_kv_table("当前", {k: f"{v['used']}/{v['limit']}" for k, v in snap.items()}))
-
-
-# ── 面板 ─────────────────────────────────────────────────────
-
-
-@app.command()
-def web(
-    host: str = typer.Option("", "--host"),
-    port: int = typer.Option(0, "--port"),
-    reload: bool = typer.Option(False, "--reload"),
-) -> None:
-    """启动本地网页面板。"""
-    try:
-        import uvicorn
-    except ImportError:
-        console.print("[red]未安装 uvicorn/fastapi，请先运行 scripts/setup.ps1[/]")
-        raise typer.Exit(code=1) from None
-
-    with _ctx() as ctx:
-        h = host or ctx.config.web.host
-        p = port or ctx.config.web.port
-
-    console.print(f"[green]面板地址： http://{h}:{p}[/]  （Ctrl+C 停止）")
-    uvicorn.run("scout.web.app:create_app", factory=True, host=h, port=p, reload=reload, log_level="info")
 
 
 def main() -> None:
