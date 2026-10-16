@@ -3,6 +3,7 @@ from PySide6.QtCore import Qt, Property, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPainter, QColor
 from PySide6.QtWidgets import QWidget, QFrame, QPushButton, QVBoxLayout, QHBoxLayout, QGraphicsOpacityEffect, QSizePolicy
 from .components import text
+from .appearance import color
 
 
 class ActivityDot(QWidget):
@@ -43,10 +44,10 @@ class ActivityDot(QWidget):
     def paintEvent(self, event):
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        color = QColor("#9873FF" if self.running else "#697180")
-        color.setAlphaF(self._strength)
+        shade = QColor(color("accent" if self.running else "faint"))
+        shade.setAlphaF(self._strength)
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(color)
+        painter.setBrush(shade)
         painter.drawEllipse(4, 4, 8, 8)
 
 

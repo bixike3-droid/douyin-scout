@@ -18,8 +18,9 @@ from PySide6.QtWidgets import (
 
 from .jobs import Jobs
 from ..util import local_tz, parse_iso
-from .components import MetricCard, TaskSummary, card, text
+from .components import MetricCard, TaskSummary, ElidedLabel, card, text
 from .theme import apply_theme, icon
+from .appearance import THEMES, color
 from .operations import Operations
 from .harness import HarnessPage, TitleBar
 from .enterprise import report_time
@@ -112,8 +113,8 @@ class RecordsModel(QAbstractTableModel):
         if role == Qt.ItemDataRole.TextAlignmentRole:
             return int((Qt.AlignmentFlag.AlignRight if key in numbers else Qt.AlignmentFlag.AlignLeft) | Qt.AlignmentFlag.AlignVCenter)
         if role == Qt.ItemDataRole.ForegroundRole and key == "state":
-            color = {"done": "#24947A", "pending": "#B68024", "failed": "#C1576B", "running": "#527AF2"}.get(value)
-            return QColor(color) if color else None
+            shade = {"done": "success", "pending": "warning", "failed": "danger", "running": "accent"}.get(value)
+            return QColor(color(shade)) if shade else None
         if role not in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.ToolTipRole):
             return None
         if key in numbers and isinstance(value, int):
@@ -185,7 +186,7 @@ class RecordsPage(QWidget):
         splitter.setSizes([700, 300])
         splitter.setCollapsible(0, False)
         splitter.setCollapsible(1, False)
-        splitter.setHandleWidth(16)
+        splitter.setHandleWidth(6)
         layout.addWidget(splitter, 1)
         controls = QHBoxLayout()
         self.count = label("正在读取…")
@@ -289,8 +290,11 @@ class RecordsPage(QWidget):
 class MainWindow(QMainWindow):
     def __init__(self, service):
         super().__init__()
-        apply_theme(QApplication.instance())
         self.service = service
+        self.ui_preferences = QSettings(str(service.paths.root / "desktop-ui.ini"), QSettings.Format.IniFormat)
+        appearance = self.ui_preferences.value("appearance", "light")
+        self.appearance_mode = appearance if appearance in THEMES else "light"
+        apply_theme(QApplication.instance(), self.appearance_mode)
         self.initialized = False
         self.pending = False
         self.closing = False
@@ -298,8 +302,8 @@ class MainWindow(QMainWindow):
         self._recent_fingerprint = None
         self.setWindowTitle("源镜 · 传播工作台")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
-        self.setWindowIcon(icon("sparkles", "#75D8BA", 32))
-        self.resize(1600, 1000)
+        self.setWindowIcon(icon("sparkles", size=32))
+        self.resize(1480, 960)
         self.setMinimumSize(1060, 720)
         self.jobs = Jobs(self)
         self.jobs.succeeded.connect(self._result)
@@ -315,7 +319,6 @@ class MainWindow(QMainWindow):
         self.enterprise_report_id = None
         self.conversation_to_load = None
         self.start_enterprise_after_save = None
-        self.ui_preferences = QSettings(str(service.paths.root / "desktop-ui.ini"), QSettings.Format.IniFormat)
         self.motion_enabled = self.ui_preferences.value("motionEnabled", True, type=bool)
         self.conversation_to_load = self.ui_preferences.value("lastConversation", 0, type=int) or None
         self._build()
@@ -348,23 +351,34 @@ class MainWindow(QMainWindow):
         self.title_bar = TitleBar(self)
         self.title_bar.brand.clicked.connect(about.trigger)
         self.connection_state = text("登录未保存", "muted")
+        self.connection_state.setWordWrap(False)
         self.title_bar.row.addWidget(self.connection_state)
         folder_button = QPushButton()
-        folder_button.setIcon(icon("folder", "#A7AFBE", 18))
+        folder_button.setObjectName("toolbarButton")
+        folder_button.setFixedSize(32, 32)
+        folder_button.setIcon(icon("folder", size=18))
         folder_button.setToolTip("打开数据目录")
         folder_button.setAccessibleName("打开数据目录")
         folder_button.clicked.connect(folder.trigger)
         self.title_bar.row.addWidget(folder_button)
         self.refresh_button = QPushButton()
-        self.refresh_button.setIcon(icon("refresh", "#A7AFBE", 18))
+        self.refresh_button.setObjectName("toolbarButton")
+        self.refresh_button.setFixedSize(32, 32)
+        self.refresh_button.setIcon(icon("refresh", size=18))
         self.refresh_button.setToolTip("刷新本地数据")
         self.refresh_button.setAccessibleName("刷新本地数据")
         self.refresh_button.clicked.connect(self.refresh)
         self.title_bar.row.addWidget(self.refresh_button)
         self.login_button = QPushButton("登录抖音")
-        self.login_button.setIcon(icon("users", "#B49AFF", 18))
+        self.login_button.setIcon(icon("users", size=18))
         self.login_button.clicked.connect(lambda: self._start_operation("login"))
         self.title_bar.row.addWidget(self.login_button)
+        self.appearance_button = QPushButton("浅色" if self.appearance_mode == "light" else "深色")
+        self.appearance_button.setObjectName("appearanceToggle")
+        self.appearance_button.setToolTip("切换明暗外观")
+        self.appearance_button.setAccessibleName("切换明暗外观")
+        self.appearance_button.clicked.connect(lambda: self._set_appearance("dark" if self.appearance_mode == "light" else "light"))
+        self.title_bar.row.addWidget(self.appearance_button)
         self.title_bar.add_controls()
         root_layout.addWidget(self.title_bar)
         body = QHBoxLayout()
@@ -372,22 +386,21 @@ class MainWindow(QMainWindow):
         body.setSpacing(0)
         sidebar = QWidget()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(260)
+        sidebar.setFixedWidth(216)
         side_layout = QVBoxLayout(sidebar)
-        side_layout.setContentsMargins(12, 12, 12, 16)
-        side_layout.setSpacing(14)
-        self.new_task_button = QPushButton("＋    新建任务")
-        self.new_task_button.setObjectName("primary")
-        self.new_task_button.setStyleSheet("font-size:15px;text-align:left;padding-left:16px;")
-        self.new_task_button.setMinimumHeight(46)
+        side_layout.setContentsMargins(12, 18, 12, 16)
+        side_layout.setSpacing(12)
+        self.new_task_button = QPushButton("＋  新建任务")
+        self.new_task_button.setObjectName("sidebarNewTask")
+        self.new_task_button.setMinimumHeight(40)
         self.new_task_button.clicked.connect(self._new_enterprise_task)
         side_layout.addWidget(self.new_task_button)
         self.nav = QListWidget()
         self.nav.setObjectName("navigation")
         self.nav.setIconSize(QSize(20, 20))
         for name, key in PAGES:
-            self.nav.addItem(QListWidgetItem(icon(key, "#A9B3C6"), name))
-        self.nav.setFixedHeight(350)
+            self.nav.addItem(QListWidgetItem(icon(key), name))
+        self.nav.setFixedHeight(308)
         side_layout.addWidget(self.nav)
         profile_button = QPushButton("企业资料    ›")
         profile_button.setObjectName("linkButton")
@@ -414,7 +427,7 @@ class MainWindow(QMainWindow):
         content.setSpacing(0)
         self.page_header = QWidget()
         header = QVBoxLayout(self.page_header)
-        header.setContentsMargins(20, 18, 20, 14)
+        header.setContentsMargins(28, 24, 28, 12)
         self.heading = label("传播工作台")
         self.heading.setObjectName("heading")
         self.subtitle = text("", "subtitle")
@@ -441,6 +454,7 @@ class MainWindow(QMainWindow):
         self.enterprise.set_motion(self.motion_enabled)
         self.enterprise.task_requested.connect(self._submit_enterprise_task)
         self.enterprise.cancel_requested.connect(self._cancel_chat)
+        self.enterprise.workflow_requested.connect(self._submit_workflow)
         self.enterprise.navigate_requested.connect(self._navigate_key)
         self.enterprise.history_changed.connect(self._update_recent_tasks)
         self.enterprise.report_selected.connect(self._highlight_recent_task)
@@ -457,7 +471,7 @@ class MainWindow(QMainWindow):
         self.records = {}
         for key in ("works", "users", "analyses", "tasks"):
             pane = RecordsPage(key, self.refresh)
-            pane.layout().setContentsMargins(20, 12, 20, 16)
+            pane.layout().setContentsMargins(28, 12, 28, 20)
             self.records[key] = pane
             self.stack.addWidget(pane)
         self._build_operation_controls()
@@ -487,7 +501,7 @@ class MainWindow(QMainWindow):
         page = QWidget()
         page.setObjectName("overviewBody")
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(28, 8, 28, 20)
         layout.setSpacing(20)
         self.account = label("正在读取账号资料…")
         self.account.setObjectName("muted")
@@ -562,7 +576,7 @@ class MainWindow(QMainWindow):
     def _settings_page(self):
         page = QWidget()
         layout = QVBoxLayout(page)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(28, 8, 28, 24)
         settings_card, form = card("分析服务", "配置自己的 DeepSeek 服务，用于后续受众与作品分析。")
         settings_card.setMaximumWidth(800)
         self.key_state = label("正在读取…")
@@ -596,6 +610,16 @@ class MainWindow(QMainWindow):
         storage_card.setMaximumWidth(800)
         storage_layout.addWidget(text("作品、互动者与历史报告保存在本机。窗口顶部可登录抖音，任务记录中可启动采集，分析报告中可生成画像、评价和计划。", "muted"))
         layout.addWidget(storage_card)
+        appearance_card, appearance_layout = card("外观", "为整个工作空间选择明暗外观。")
+        appearance_card.setMaximumWidth(800)
+        self.appearance_combo = QComboBox()
+        self.appearance_combo.setAccessibleName("界面外观")
+        self.appearance_combo.addItem("浅色", "light")
+        self.appearance_combo.addItem("深色", "dark")
+        self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(self.appearance_mode))
+        self.appearance_combo.currentIndexChanged.connect(lambda index: self._set_appearance(self.appearance_combo.itemData(index)))
+        appearance_layout.addWidget(self.appearance_combo)
+        layout.addWidget(appearance_card)
         motion_card, motion_layout = card("交互动效", "展开、页面切换和处理中状态使用轻量动画。")
         self.motion_toggle = QCheckBox("启用界面动效")
         self.motion_toggle.setChecked(self.motion_enabled)
@@ -728,6 +752,10 @@ class MainWindow(QMainWindow):
         message = event.get("message")
         if event.get("conversation_id"):
             self.enterprise.conversation_id = event["conversation_id"]
+        if event.get("type") == "workflow":
+            self.enterprise.workflow_card.apply(event["workflow"], self.operations.busy)
+            self.enterprise._scroll_chat_bottom(smooth=False)
+            return
         if event.get("type") == "thinking":
             self.enterprise.append_reasoning(event.get("delta") or "")
             return
@@ -781,6 +809,8 @@ class MainWindow(QMainWindow):
             if result.get("cancelled"):
                 # 停止时不丢弃已产生的思考过程，保留为"思考已停止"供回看。
                 self.enterprise.end_reasoning(stopped=True)
+                if self.enterprise.conversation_id:
+                    self.conversation_to_load = self.enterprise.conversation_id
             elif result.get("conversation"):
                 self.enterprise.apply_conversation(result["conversation"])
                 self.ui_preferences.setValue("lastConversation", result["conversation"]["id"])
@@ -891,6 +921,17 @@ class MainWindow(QMainWindow):
             self.operations.cancel()
             self.statusBar().showMessage("正在停止…")
 
+    def _submit_workflow(self, run_id, rerun):
+        if self.closing or not self.initialized or self.jobs.busy or self.operations.busy:
+            return
+        run = self.enterprise.workflow_card.run
+        if not run or run["id"] != run_id or not self.has_key:
+            return
+        self.enterprise.set_processing(True, "正在按最新数据重做…" if rerun else "正在继续未完成步骤…")
+        self.enterprise.begin_reasoning()
+        self._start_operation("chat", {"request": run["request"], "conversation_id": self.enterprise.conversation_id,
+                                       "workflow_run_id": run_id, "rerun": rerun})
+
     def _navigate_key(self, key):
         self.nav.setCurrentRow(next(i for i, item in enumerate(PAGES) if item[1] == key))
 
@@ -911,17 +952,19 @@ class MainWindow(QMainWindow):
             for report in reports:
                 item = QListWidgetItem()
                 item.setData(Qt.ItemDataRole.UserRole, (report.get("kind", "report"), report["id"]))
-                item.setSizeHint(QSize(220, 88))
+                item.setSizeHint(QSize(178, 66))
                 panel = QWidget()
                 panel.setStyleSheet("background: transparent;")
                 layout = QVBoxLayout(panel)
                 layout.setContentsMargins(10, 8, 10, 8)
-                layout.setSpacing(6)
-                title = text(report["title"][:48], "speaker")
-                title.setMaximumHeight(38)
+                layout.setSpacing(4)
+                title = ElidedLabel(report["title"], "historyTitle")
+                title.setFixedHeight(22)
                 layout.addWidget(title)
                 state = "对话" if report.get("kind") == "conversation" else ("已复核" if report.get("reviewed") else "待复核")
-                layout.addWidget(text(state + " · " + report_time(report["created_at"]), "muted"))
+                metadata = ElidedLabel(state + " · " + report_time(report["created_at"]), "historyMeta")
+                layout.addWidget(metadata)
+                panel.setToolTip(report["title"])
                 self.recent_tasks.addItem(item)
                 self.recent_tasks.setItemWidget(item, panel)
             self.empty_history.setVisible(not reports)
@@ -947,6 +990,7 @@ class MainWindow(QMainWindow):
         else:
             self.enterprise.conversation_id = None
             self.enterprise.conversation_data = None
+            self.enterprise.workflow_card.apply(None)
             self._request_enterprise_report(record_id)
 
     def _highlight_recent_task(self, report_id):
@@ -966,6 +1010,21 @@ class MainWindow(QMainWindow):
                 self.recent_tasks.setCurrentRow(index)
                 break
         self.recent_tasks.blockSignals(False)
+
+    def _set_appearance(self, mode):
+        if mode not in THEMES:
+            return
+        self.appearance_mode = mode
+        self.ui_preferences.setValue("appearance", mode)
+        apply_theme(QApplication.instance(), mode)
+        self.appearance_button.setText("浅色" if mode == "light" else "深色")
+        self.appearance_combo.blockSignals(True)
+        self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(mode))
+        self.appearance_combo.blockSignals(False)
+        for page in self.records.values():
+            if page.model.rowCount():
+                page.model.dataChanged.emit(page.model.index(0, 0), page.model.index(page.model.rowCount() - 1, page.model.columnCount() - 1))
+        self.statusBar().showMessage("已切换为浅色外观" if mode == "light" else "已切换为深色外观", 3000)
 
     def _set_motion(self, enabled):
         self.motion_enabled = enabled

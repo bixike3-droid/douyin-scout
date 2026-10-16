@@ -17,6 +17,8 @@ def main():
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--width", default=1440, type=int)
     parser.add_argument("--height", default=940, type=int)
+    parser.add_argument("--appearance", choices=("light", "dark"), default="light")
+    parser.add_argument("--conversation-id", type=int, help="Show a saved conversation in the workspace preview")
     args = parser.parse_args()
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     from PySide6.QtWidgets import QApplication
@@ -41,6 +43,9 @@ def main():
             original.backup(target)
     service = DesktopService(paths)
     window = MainWindow(service)
+    window._set_appearance(args.appearance)
+    window.motion_enabled = False
+    window.enterprise.set_motion(False)
     window.resize(args.width, args.height)
     window.show()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -65,6 +70,13 @@ def main():
         for index, (_, key) in enumerate(PAGES):
             window.nav.setCurrentRow(index)
             settle()
+            if key == "enterprise" and args.conversation_id:
+                conversation = service.conversation(args.conversation_id)
+                window.enterprise.apply_conversation(conversation)
+                if conversation.get("report_id"):
+                    window.enterprise.apply_report(service.enterprise_report(conversation["report_id"]))
+                    window.enterprise.right_tabs.setCurrentIndex(1)
+                settle()
             if key in window.records and window.records[key].model.rowCount():
                 window.records[key].table.selectRow(0)
             app.processEvents()

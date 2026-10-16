@@ -16,7 +16,8 @@ def test_native_enterprise_complete_flow_and_feedback(qt_app, ctx, monkeypatch, 
     from PySide6.QtWidgets import QFileDialog
     from scout.desktop.window import MainWindow
     add_work(ctx)
-    client = FakeClient()
+    from test_workflow import WorkflowClient
+    client = WorkflowClient()
     monkeypatch.setattr(scout.llm, "DeepSeekClient", lambda cfg: client)
     service = DesktopService(ctx.paths)
     service.save_settings("sk-test-never-sent", "test-model")
@@ -45,7 +46,7 @@ def test_native_enterprise_complete_flow_and_feedback(qt_app, ctx, monkeypatch, 
         assert "人工补录" in window.records["works"].model.rows[0]["metric_note"]
         window.nav.setCurrentRow(0)
         pump(qt_app, lambda: settled(window))
-        pane.composer.setPlainText("测试：为竹梦村策划周末散客内容")
+        pane.composer.setPlainText("仅用已有数据，为企业生成周末散客传播方案")
         pane.generate_button.click()
         pump(qt_app, lambda: pane.current_report is not None and settled(window))
         assert "个性化选题" in pane.editor.toPlainText()
@@ -63,14 +64,14 @@ def test_native_enterprise_complete_flow_and_feedback(qt_app, ctx, monkeypatch, 
         assert "原始模型建议" in target.read_text(encoding="utf-8")
         pane.generate_button.click()
         pump(qt_app, lambda: settled(window))
-        assert len(client.calls) == 1 and pane.current_report["id"] == first_id
+        assert len(client.calls) == 2 and pane.current_report["id"] == first_id
         pane.fields["feedback"].setPlainText("模拟复盘：已执行报告1的选题，未获得到店记录")
         pane.feedback_report.setCurrentIndex(pane.feedback_report.findData(first_id))
         pane.save_profile_button.click()
         pump(qt_app, lambda: not pane.profile_dirty and settled(window))
-        pane.generate_button.click()
+        pane.workflow_card.rerun.click()
         pump(qt_app, lambda: pane.current_report is not None and pane.current_report["id"] != first_id and settled(window))
-        assert len(client.calls) == 2
+        assert len(client.calls) == 4
         assert "E2" in pane.evidence.toPlainText()
         assert "E3" in pane.evidence.toPlainText()
         assert ctx.db.scalar("SELECT COUNT(*) FROM enterprise_revisions") == 1

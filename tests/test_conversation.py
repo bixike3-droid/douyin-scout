@@ -94,12 +94,13 @@ def test_cancelled_turn_is_not_successful_or_added_to_model_history(ctx):
     assert not Conversations(ctx.db).history(1)
 
 
-def test_invalid_plan_preserves_reply_and_does_not_create_report(ctx):
+def test_invalid_plan_preserves_completed_stages_and_does_not_create_report(ctx):
     class Invalid:
         async def chat(self, *args, **kwargs):
             return LLMReply(text=json.dumps({"reply": "可阅读的模型回复", "plan": {"bad": True}}), model="test")
     result = asyncio.run(send(ctx, Invalid(), "请生成方案", want_plan=True))
-    assert "可阅读的模型回复" in result["conversation"]["messages"][-1]["content"]
+    assert result["failed"] and result["workflow"]["status"] == "failed"
+    assert result["workflow"]["steps"][0]["status"] == "complete"
     assert result["report_id"] is None and ctx.db.scalar("SELECT COUNT(*) FROM enterprise_reports") == 0
 
 

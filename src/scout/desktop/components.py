@@ -1,10 +1,42 @@
 """Small native widgets shared by the desktop pages."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QSize
+from PySide6.QtGui import QPainter, QPalette
+from PySide6.QtWidgets import QStyle, QStyleOption
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from .theme import icon
+
+
+class ElidedLabel(QLabel):
+    """Keep the full title available while painting a single fitted line."""
+    def __init__(self, value="", style="", parent=None):
+        super().__init__(value, parent)
+        if style:
+            self.setObjectName(style)
+        self.setWordWrap(False)
+        self.setToolTip(value)
+
+    def setText(self, value):
+        super().setText(value)
+        self.setToolTip(value)
+
+    def minimumSizeHint(self):
+        return QSize(0, super().minimumSizeHint().height())
+
+    def sizeHint(self):
+        hint = super().sizeHint()
+        return QSize(min(400, hint.width()), hint.height())
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        option = QStyleOption()
+        option.initFrom(self)
+        self.style().drawPrimitive(QStyle.PrimitiveElement.PE_Widget, option, painter, self)
+        fitted = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.contentsRect().width())
+        self.style().drawItemText(painter, self.contentsRect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+                                 self.palette(), self.isEnabled(), fitted, QPalette.ColorRole.WindowText)
 
 
 def text(value, style="", parent=None):
@@ -39,7 +71,9 @@ class MetricCard(QFrame):
         header = QHBoxLayout()
         header.addWidget(text(title, "metricTitle"), 1)
         glyph = QLabel()
-        glyph.setPixmap(icon(symbol, "#6887D5", 22).pixmap(22, 22))
+        glyph.setProperty("themeGlyph", symbol)
+        glyph.setProperty("themeGlyphSize", 22)
+        glyph.setPixmap(icon(symbol, size=22).pixmap(22, 22))
         header.addWidget(glyph)
         layout.addLayout(header)
         self.value = text("—", "metricValue")
@@ -54,13 +88,13 @@ class TaskSummary(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(15)
         self.rows = {}
-        for state, title, color in [("done", "已完成", "#42AF94"), ("pending", "待处理", "#E7AF50"),
-                                    ("running", "执行中", "#527AF2"), ("failed", "失败", "#DA7382"),
-                                    ("blocked", "已暂停", "#99A6BB")]:
+        for state, title in [("done", "已完成"), ("pending", "待处理"), ("running", "执行中"),
+                             ("failed", "失败"), ("blocked", "已暂停")]:
             row = QHBoxLayout()
             dot = QLabel()
             dot.setFixedSize(8, 8)
-            dot.setStyleSheet(f"background:{color};border-radius:4px;")
+            dot.setObjectName("statusDot")
+            dot.setProperty("status", state)
             row.addWidget(dot)
             row.addWidget(text(title, "muted"), 1)
             value = text("—")

@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
     QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel)
 from ..analyze.agents import DEFAULT_AGENT_ID, TEAM, get as get_agent
 from .enterprise import EnterprisePage, report_time
-from .components import text
+from .components import text, ElidedLabel
 from .motion import ActivityDot, Disclosure, fade_in
 from .theme import agent_badge, icon
 from .diagrams import extract_mermaid_blocks, render_png, strip_mermaid_blocks
@@ -17,7 +17,10 @@ def clear_layout(layout):
     while layout.count():
         item = layout.takeAt(0)
         if item.widget():
-            item.widget().deleteLater()
+            widget = item.widget()
+            widget.hide()
+            widget.setParent(None)
+            widget.deleteLater()
 
 
 class ReasoningPanel(QFrame):
@@ -256,13 +259,6 @@ class DiagramView(QFrame):
         self.image.setPixmap(target)
 
 
-MARK_COLORS = {
-    "可用": ("#17351F", "#7BE3A0"),
-    "参考": ("#3A2F14", "#F2C46D"),
-    "无关": ("#2A303C", "#98A2B3"),
-}
-
-
 class HotTopicRow(QFrame):
     """一条热点：标记徽章 + 标题 + AI 评估理由；点击后交给团队拆解。"""
 
@@ -284,9 +280,8 @@ class HotTopicRow(QFrame):
         layout.addWidget(rank)
         mark = str(topic.get("mark") or "")
         badge = QLabel(mark or "待评估")
-        background, foreground = MARK_COLORS.get(mark, ("#2A303C", "#8B93A3"))
-        badge.setStyleSheet(f"background:{background};color:{foreground};border-radius:7px;"
-                            "padding:2px 8px;font-weight:600;font-size:11px;")
+        badge.setObjectName("hotBadge")
+        badge.setProperty("mark", mark)
         badge.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
         layout.addWidget(badge)
         info = QVBoxLayout()
@@ -299,7 +294,9 @@ class HotTopicRow(QFrame):
         layout.addLayout(info, 1)
         heat = topic.get("heat")
         if heat:
-            heat_label = text(str(heat), "muted")
+            heat_text = f"{heat / 10000:.1f}万" if isinstance(heat, (int, float)) and heat >= 10000 else str(heat)
+            heat_label = text(heat_text, "muted")
+            heat_label.setToolTip(str(heat))
             heat_label.setAlignment(Qt.AlignmentFlag.AlignTop)
             layout.addWidget(heat_label)
         self.setToolTip((why + "\n" if why else "") + "点击：让团队拆解这个热点")
@@ -454,12 +451,86 @@ class CanvasPanel(QWidget):
         self.hint.setText("最新一张 · 团队分析时自动生成")
 
 
+class WorkflowCard(QFrame):
+    action_requested = Signal(int, bool)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.run = None
+        self.setObjectName("workflowCard")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        self.title = text("团队任务", "workflowTitle")
+        self.title.setTextFormat(Qt.TextFormat.PlainText)
+        self.steps = text("", "workflowSteps")
+        self.steps.setTextFormat(Qt.TextFormat.PlainText)
+        self.steps.setWordWrap(True)
+        layout.addWidget(self.title)
+        layout.addWidget(self.steps)
+        row = QHBoxLayout()
+        self.details = QPushButton("查看阶段成果")
+        self.details.clicked.connect(self.show_details)
+        self.resume = QPushButton("继续未完成步骤")
+        self.resume.clicked.connect(lambda: self.action_requested.emit(self.run["id"], False) if self.run else None)
+        self.rerun = QPushButton("按最新数据重做")
+        self.rerun.clicked.connect(lambda: self.action_requested.emit(self.run["id"], True) if self.run else None)
+        for button in (self.details, self.resume, self.rerun):
+            row.addWidget(button)
+        row.addStretch()
+        layout.addLayout(row)
+        self.hide()
+
+    def apply(self, run, busy=False):
+        self.run = run
+        if not run:
+            self.hide()
+            return
+        from ..analyze.workflow import STEP_NAMES
+        states = {"pending": "等待", "running": "处理中" if busy else "上次执行未结束",
+                  "waiting": "等待确认" if busy else "上次确认未结束", "complete": "已完成",
+                  "partial": "部分完成", "failed": "失败", "cancelled": "已停止", "skipped": "资料不足"}
+        marks = {"complete": "✓", "skipped": "—", "running": "●", "failed": "!", "cancelled": "■"}
+        self.title.setText(f"团队任务 · {states.get(run['status'], run['status'])}")
+        lines = [f"{marks.get(s['status'], '○')} {get_agent(s['agent']).name} · {STEP_NAMES[s['name']]}：{states.get(s['status'], s['status'])}" for s in run["steps"]]
+        if run.get("error"):
+            lines.append("\n" + run["error"])
+        self.steps.setText("\n".join(lines))
+        self.details.setEnabled(bool(run.get("artifacts")))
+        self.resume.setVisible(run["status"] not in ("complete", "partial"))
+        self.resume.setEnabled(not busy)
+        self.rerun.setEnabled(not busy)
+        self.show()
+
+    def show_details(self):
+        if not self.run:
+            return
+        from ..analyze.workflow import STEP_NAMES, _message
+        from ..analyze.enterprise import render_output
+        self.dialog = QDialog(self)
+        self.dialog.setWindowTitle("阶段成果与依据")
+        self.dialog.resize(800, 620)
+        layout = QVBoxLayout(self.dialog)
+        browser = SafeMessageBrowser()
+        sections = []
+        for artifact in self.run.get("artifacts", []):
+            content = artifact["content"]
+            body = render_output(content) if artifact["kind"] == "strategy" else _message(artifact["kind"], content)
+            sections.append(STEP_NAMES[artifact["kind"]] + f" · 成果 {artifact['id']}\n" + body)
+            if artifact["kind"] == "data":
+                from ..analyze.workflow import evidence_text
+                sections.append("本次原始依据\n" + evidence_text(content))
+        browser.setPlainText("\n\n".join(sections) or "尚未保存阶段成果")
+        layout.addWidget(browser)
+        self.dialog.show()
+
+
 class HarnessPage(EnterprisePage):
     confirmation_answered = Signal(str, bool)
     hot_refresh_requested = Signal()
     navigate_requested = Signal(str)
     task_requested = Signal(str, bool)
     cancel_requested = Signal()
+    workflow_requested = Signal(int, bool)
     history_changed = Signal(object)
     report_selected = Signal(int)
     conversation_selected = Signal(int)
@@ -498,6 +569,7 @@ class HarnessPage(EnterprisePage):
         self.generate_button.clicked.disconnect()
         self.generate_button.clicked.connect(self._on_generate)
         self.generate_button.setText("发送")
+        self.generate_button.setObjectName("sendButton")
         self.generate_button.setIcon(icon("send", "#FFFFFF", 19))
         self.generate_button.setFixedWidth(82)
         self.generate_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -506,17 +578,17 @@ class HarnessPage(EnterprisePage):
     def _build_workspace(self):
         self.layout().setSpacing(0)
         self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.setHandleWidth(6)
+        self.splitter.setHandleWidth(4)
         self.splitter.setChildrenCollapsible(False)
         self.layout().addWidget(self.splitter)
         center = QWidget()
         center.setObjectName("conversationPane")
         center.setMinimumWidth(410)
         main = QVBoxLayout(center)
-        main.setContentsMargins(20, 20, 20, 14)
+        main.setContentsMargins(28, 24, 28, 16)
         main.setSpacing(14)
-        self.task_title = text("新任务", "taskHeading")
-        self.task_title.setMaximumHeight(60)
+        self.task_title = ElidedLabel("新任务", "taskHeading")
+        self.task_title.setFixedHeight(38)
         main.addWidget(self.task_title)
         self.task_date = text("把你要解决的问题说给团队，合适的同事会来接手。", "muted")
         main.addWidget(self.task_date)
@@ -525,8 +597,8 @@ class HarnessPage(EnterprisePage):
         self.agent_bar = QWidget()
         bar_layout = QGridLayout(self.agent_bar)
         bar_layout.setContentsMargins(0, 0, 0, 0)
-        bar_layout.setHorizontalSpacing(14)
-        bar_layout.setVerticalSpacing(7)
+        bar_layout.setHorizontalSpacing(12)
+        bar_layout.setVerticalSpacing(5)
         for index, member in enumerate(TEAM):
             cell = QWidget()
             cell_layout = QHBoxLayout(cell)
@@ -534,9 +606,11 @@ class HarnessPage(EnterprisePage):
             cell_layout.setSpacing(7)
             badge = QLabel()
             badge.setObjectName("agentAvatar")
-            badge.setFixedSize(26, 26)
+            badge.setFixedSize(20, 20)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
-            badge.setPixmap(agent_badge(member.color, member.icon, 26).pixmap(26, 26))
+            badge.setProperty("agentGlyph", member.icon)
+            badge.setProperty("agentGlyphSize", 20)
+            badge.setPixmap(agent_badge(member.color, member.icon, 20).pixmap(20, 20))
             cell_layout.addWidget(badge)
             cell_layout.addWidget(text(member.name, "agentName"))
             cell.setToolTip(member.name + " · " + member.role)
@@ -547,9 +621,10 @@ class HarnessPage(EnterprisePage):
         scroll.setWidgetResizable(True)
         scroll.viewport().installEventFilter(self)
         scroll.verticalScrollBar().valueChanged.connect(self._on_chat_scrolled)
+        scroll.verticalScrollBar().sliderPressed.connect(self._stop_scroll_animation)
         self.scroll_float = QPushButton("回到底部", scroll.viewport())
         self.scroll_float.setObjectName("scrollBottom")
-        self.scroll_float.setIcon(icon("arrowDown", "#C7D0E2", 15))
+        self.scroll_float.setIcon(icon("arrowDown", size=15))
         self.scroll_float.setCursor(Qt.CursorShape.PointingHandCursor)
         self.scroll_float.clicked.connect(self._jump_to_bottom)
         self.scroll_float.hide()
@@ -584,8 +659,11 @@ class HarnessPage(EnterprisePage):
         self.transcript = QWidget()
         self.transcript_layout = QVBoxLayout(self.transcript)
         self.transcript_layout.setContentsMargins(0, 0, 0, 0)
-        self.transcript_layout.setSpacing(14)
+        self.transcript_layout.setSpacing(22)
         flow.addWidget(self.transcript)
+        self.workflow_card = WorkflowCard()
+        self.workflow_card.action_requested.connect(self.workflow_requested)
+        flow.addWidget(self.workflow_card)
         self.reply_status = text("", "muted")
         self.reply_status.hide()
         flow.addWidget(self.reply_status)
@@ -626,7 +704,7 @@ class HarnessPage(EnterprisePage):
         composer_box = QFrame()
         composer_box.setObjectName("composerBox")
         box = QVBoxLayout(composer_box)
-        box.setContentsMargins(12, 9, 12, 9)
+        box.setContentsMargins(14, 10, 14, 10)
         box.setSpacing(6)
         self.composer = Composer()
         self.composer.setObjectName("composer")
@@ -643,13 +721,13 @@ class HarnessPage(EnterprisePage):
         row.addWidget(self.generate_button)
         box.addLayout(row)
         main.addWidget(composer_box)
-        main.addWidget(text("Enter 发送 · Shift + Enter 换行 · 团队会自动把任务交给最合适的人", "composerHint"))
+        main.addWidget(text("Enter 发送 · Shift + Enter 换行 · 复杂任务由团队接力完成", "composerHint"))
         self.splitter.addWidget(center)
         right = QWidget()
         right.setObjectName("resultPane")
         right.setMinimumWidth(360)
         result_layout = QVBoxLayout(right)
-        result_layout.setContentsMargins(18, 12, 18, 14)
+        result_layout.setContentsMargins(22, 20, 22, 18)
         result_layout.setSpacing(12)
         self.right_tabs = QTabWidget()
         self.right_tabs.setObjectName("resultTabs")
@@ -659,8 +737,8 @@ class HarnessPage(EnterprisePage):
         self.plan_body = QWidget()
         self.plan_body.setObjectName("resultBody")
         self.plan_layout = QVBoxLayout(self.plan_body)
-        self.plan_layout.setContentsMargins(0, 16, 0, 0)
-        self.plan_layout.setSpacing(14)
+        self.plan_layout.setContentsMargins(20, 22, 20, 20)
+        self.plan_layout.setSpacing(17)
         self.plan_scroll.setWidget(self.plan_body)
         self.hot_panel = HotBoardPanel()
         self.hot_panel.refresh_requested.connect(self.hot_refresh_requested)
@@ -691,17 +769,21 @@ class HarnessPage(EnterprisePage):
         buttons.addWidget(self.modify_button)
         self.save_revision_button.setVisible(False)
         buttons.addWidget(self.save_revision_button)
+        buttons.addStretch()
         self.export_button.setText("导出报告")
+        self.export_button.setMaximumWidth(150)
         self.export_button.setObjectName("primary")
         buttons.addWidget(self.export_button)
         result_layout.addLayout(buttons)
         self.splitter.addWidget(right)
-        self.splitter.setSizes([720, 480])
+        self.splitter.setSizes([700, 490])
         self._empty_plan()
         self._show_team_greeting()
 
     def _show_team_greeting(self):
         steward = get_agent(DEFAULT_AGENT_ID)
+        self.ai_avatar.setProperty("agentGlyph", steward.icon)
+        self.ai_avatar.setProperty("agentGlyphSize", 34)
         self.ai_avatar.setPixmap(agent_badge(steward.color, steward.icon, 34).pixmap(34, 34))
         self.ai_speaker.setText(steward.name)
         self.ai_role.setText(steward.role)
@@ -756,7 +838,7 @@ class HarnessPage(EnterprisePage):
         self.task_requested.emit(request, False)
 
     def _request_plan(self):
-        self.task_requested.emit("请根据当前对话和已保存的企业资料，生成完整传播方案。缺失事实列为待确认，不要编造。", True)
+        self.task_requested.emit("请根据当前对话、已保存的企业资料及已有数据，生成完整传播方案。缺失事实列为待确认，不要编造。", True)
 
     def _on_generate(self):
         if self.processing:
@@ -778,6 +860,10 @@ class HarnessPage(EnterprisePage):
         if not users:
             self.notice.emit("没有可重试的消息")
             return
+        run = self.workflow_card.run
+        if run and run["status"] in ("failed", "cancelled", "running", "waiting") and users[-1]["content"] == run["request"]:
+            self.workflow_requested.emit(run["id"], False)
+            return
         self.task_requested.emit(users[-1]["content"], False)
 
     def new_task(self):
@@ -786,6 +872,7 @@ class HarnessPage(EnterprisePage):
         self.new_task_mode = True
         self.conversation_id = None
         self.conversation_data = None
+        self.workflow_card.apply(None)
         self.reasoning_panel = None
         self._rendered_count = 0
         clear_layout(self.transcript_layout)
@@ -843,6 +930,8 @@ class HarnessPage(EnterprisePage):
 
     def apply_report(self, report):
         super().apply_report(report)
+        self.report_state.setToolTip(self.report_state.text())
+        self.report_state.setText(f"报告 {report['id']} · " + ("用户已复核" if report["revisions"] and report["revisions"][-1]["reviewed"] else "待人工复核"))
         self.new_task_mode = False
         company = report["input"]["evidence"][0]["data"]
         request = company.get("request") or company.get("goal") or "传播决策报告"
@@ -880,16 +969,14 @@ class HarnessPage(EnterprisePage):
                 panel = QFrame()
                 panel.setObjectName("topicCard")
                 layout = QVBoxLayout(panel)
-                layout.setContentsMargins(14, 14, 14, 14)
-                layout.setSpacing(10)
-                layout.addWidget(text(f"{index + 1}   {topic['title']}", "topicTitle"))
-                row = QHBoxLayout()
+                layout.setContentsMargins(0, 20, 0, 18)
+                layout.setSpacing(12)
+                layout.addWidget(text(f"{index + 1:02d}   {topic['title']}", "topicTitle"))
                 placeholder = text("暂无素材", "materialPlaceholder")
                 placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                placeholder.setFixedSize(94, 76)
-                row.addWidget(placeholder, alignment=Qt.AlignmentFlag.AlignTop)
-                row.addWidget(text("开头：" + topic["hook"] + "\n\n" + topic["outline"], "bodyText"), 1)
-                layout.addLayout(row)
+                placeholder.setContentsMargins(8, 4, 8, 4)
+                layout.addWidget(placeholder, alignment=Qt.AlignmentFlag.AlignLeft)
+                layout.addWidget(text("开头：" + topic["hook"] + "\n\n拍摄提纲：" + topic["outline"], "bodyText"))
                 layout.addWidget(text("渠道：" + topic["platform"] + "\n行动引导：" + topic["cta"], "bodyText"))
                 source = text("依据与来源：" + " · ".join(topic["evidence_ids"]) + "\n待确认：" + topic["needs_confirmation"], "sourceCard")
                 layout.addWidget(source)
@@ -918,6 +1005,7 @@ class HarnessPage(EnterprisePage):
 
     def set_processing(self, busy, message=""):
         self.processing = busy
+        self.workflow_card.apply(self.workflow_card.run, busy)
         self.activity.set_running(busy)
         if self.conversation_id is not None or self.conversation_data:
             self._set_reply_status(message or ("模型正在回复…" if busy else ""), busy or bool(message))
@@ -944,6 +1032,8 @@ class HarnessPage(EnterprisePage):
 
     def set_controls_enabled(self, enabled):
         self.controls_enabled = enabled
+        self.workflow_card.resume.setEnabled(enabled and not self.processing)
+        self.workflow_card.rerun.setEnabled(enabled and not self.processing)
         for widget in (self.force, self.composer, self.save_profile_button,
                        self.save_revision_button, self.export_button, self.metrics_button, self.report_select,
                        self.reason, self.reviewed, self.agent_bar, self.suggestion_row, self.modify_button, self.plan_button):
@@ -1031,12 +1121,16 @@ class HarnessPage(EnterprisePage):
             animation.setStartValue(bar.value())
             animation.setEndValue(target)
             animation.setDuration(180)
-            animation.finished.connect(lambda: bar.setValue(bar.maximum()) if self._follow else None)
+            animation.finished.connect(lambda: bar.setValue(bar.maximum()))
             animation.setEasingCurve(QEasingCurve.Type.OutCubic)
             self._scroll_animation = animation
             animation.start()
 
         QTimer.singleShot(0, start)
+
+    def _stop_scroll_animation(self):
+        if self._scroll_animation is not None:
+            self._scroll_animation.stop()
 
     def _on_chat_scrolled(self, value):
         bar = self.chat_scroll.verticalScrollBar()
@@ -1066,6 +1160,8 @@ class HarnessPage(EnterprisePage):
                 # 对话区宽度变化（窗口缩放、分栏拖动）后：气泡重新换行、浮标重新定位。
                 self._bubble_timer.start()
                 self._update_scroll_float()
+            elif watched is self.chat_scroll.viewport() and event.type() in (QEvent.Type.Wheel, QEvent.Type.TouchBegin):
+                self._stop_scroll_animation()
             elif isinstance(watched, QWidget) and watched.objectName() == "messageBlock":
                 # 悬停消息块时浮出复制等操作；失败消息的工具条常驻。
                 toolbar = watched.findChild(QWidget, "messageToolbar")
@@ -1098,6 +1194,7 @@ class HarnessPage(EnterprisePage):
         self.task_title.setText(data["title"])
         self.task_date.setText("对话创建：" + report_time(data["created_at"]))
         self._render_messages(data["messages"])
+        self.workflow_card.apply(data.get("workflow"), self.processing)
         self.reply_status.hide()
         self.conversation_selected.emit(data["id"])
 
@@ -1126,6 +1223,8 @@ class HarnessPage(EnterprisePage):
         if role == "assistant":
             badge = QLabel()
             badge.setObjectName("agentAvatar")
+            badge.setProperty("agentGlyph", agent.icon)
+            badge.setProperty("agentGlyphSize", 20)
             badge.setFixedSize(20, 20)
             badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
             badge.setPixmap(agent_badge(agent.color, agent.icon, 20).pixmap(20, 20))
@@ -1142,7 +1241,7 @@ class HarnessPage(EnterprisePage):
         actions.setSpacing(6)
         copy_button = QPushButton()
         copy_button.setObjectName("msgAction")
-        copy_button.setIcon(icon("copy", "#9AA6B8", 16))
+        copy_button.setIcon(icon("copy", size=16))
         copy_button.setFixedSize(26, 26)
         copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
         copy_button.setToolTip("复制内容")
@@ -1174,7 +1273,8 @@ class HarnessPage(EnterprisePage):
         block_format = QTextBlockFormat()
         block_format.setLineHeight(145, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
         cursor.mergeBlockFormat(block_format)
-        bubble.setStyleSheet("background:#292F39;border-radius:9px;padding:12px;" if role == "user" else "background:#252B35;border-radius:9px;padding:12px;")
+        bubble.setObjectName("messageBubble")
+        bubble.setProperty("messageRole", role)
         bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         bubble.document().setTextWidth(self._bubble_width())
         bubble.setFixedHeight(self._bubble_height(bubble))
@@ -1248,28 +1348,32 @@ class TitleBar(QWidget):
         super().__init__(window)
         self.owner = window
         self.setObjectName("titleBar")
-        self.setFixedHeight(48)
+        self.setFixedHeight(58)
         self.row = QHBoxLayout(self)
-        self.row.setContentsMargins(16, 0, 0, 0)
-        self.row.setSpacing(12)
+        self.row.setContentsMargins(14, 0, 18, 0)
+        self.row.setSpacing(10)
         self.brand = QPushButton("源镜 · 传播工作台")
-        self.brand.setObjectName("linkButton")
-        self.brand.setIcon(icon("sparkles", "#75D8BA", 26))
-        self.brand.setStyleSheet("font-size:16px;color:#E4E9F3;")
+        self.brand.setObjectName("appBrand")
+        self.brand.setIcon(icon("source", "#007AFF", 27))
         self.row.addWidget(self.brand)
         self.row.addStretch()
 
     def add_controls(self):
-        for title, name, action in (("—", "最小化", self.owner.showMinimized),
-                                    ("□", "最大化或还原", self.toggle_maximized),
-                                    ("×", "关闭", self.owner.close)):
+        controls = QWidget()
+        row = QHBoxLayout(controls)
+        row.setContentsMargins(3, 0, 12, 0)
+        row.setSpacing(8)
+        for title, name, identifier, action in (("×", "关闭", "windowClose", self.owner.close),
+                                               ("−", "最小化", "windowMinimize", self.owner.showMinimized),
+                                               ("+", "最大化或还原", "windowMaximize", self.toggle_maximized)):
             button = QPushButton(title)
-            button.setObjectName("closeControl" if title == "×" else "windowControl")
-            button.setFixedSize(40, 48)
+            button.setObjectName(identifier)
+            button.setFixedSize(14, 14)
             button.setToolTip(name)
             button.setAccessibleName(name)
             button.clicked.connect(action)
-            self.row.addWidget(button)
+            row.addWidget(button)
+        self.row.insertWidget(0, controls)
 
     def toggle_maximized(self):
         self.owner.showNormal() if self.owner.isMaximized() else self.owner.showMaximized()

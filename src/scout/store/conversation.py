@@ -17,6 +17,8 @@ class Conversations:
             raise ValueError("对话不存在")
         data = dict(row)
         data["messages"] = self.db.rows_as_dicts("SELECT * FROM conversation_messages WHERE conversation_id=? ORDER BY id", (conversation_id,))
+        from .workflow import Workflows
+        data["workflow"] = Workflows(self.db).latest(conversation_id)
         return data
 
     def recent(self):

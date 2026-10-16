@@ -5,154 +5,53 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QRectF
-from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QIconEngine, QPainter, QPen, QPixmap
 
-STYLE = """
-QMainWindow, QWidget#workspace, QWidget#overviewBody { background: #191D24; }
-QWidget { color: #D8DCE6; background: #1B2028; font-size: 13px; }
-QLabel { background: transparent; }
-QWidget#titleBar { background: #161A20; border-bottom: 1px solid #30353F; }
-QLabel#appTitle { color: #F0F1F7; font-size: 15px; font-weight: 600; }
-QWidget#sidebar { background: #171B21; border-right: 1px solid #30353F; }
-QLabel#brand { color: #F2F2FA; font-size: 19px; font-weight: 700; }
-QLabel#brandMark { color: #77D6B7; font-size: 22px; font-weight: 700; }
-QLabel#sidebarCaption, QLabel#sidebarFooter { color: #8F97A8; font-size: 12px; }
-QListWidget#navigation { background: transparent; border: none; outline: none; color: #BEC5D3; }
-QListWidget#navigation::item { padding: 12px 10px; margin: 3px 0; border-radius: 8px; }
-QListWidget#navigation::item:selected { color: #F0EAFF; background: #332B57; }
-QListWidget#navigation::item:hover:!selected { background: #222730; }
-QListWidget#recentTasks { background: transparent; border: none; outline: none; }
-QListWidget#recentTasks::item { border-radius: 9px; padding: 2px; margin: 4px 0; }
-QListWidget#recentTasks::item:selected { background: #332B57; }
-QListWidget#recentTasks::item:hover:!selected { background: #242932; }
-QLabel#heading { color: #F4F3FA; font-size: 25px; font-weight: 700; }
-QLabel#taskHeading { color: #F4F3FA; font-size: 20px; font-weight: 700; }
-QLabel#planHeading { color: #F5F4FB; font-size: 25px; font-weight: 700; }
-QLabel#subtitle, QLabel#muted, QLabel#composerHint { color: #929BAE; font-size: 12px; }
-QLabel#sectionTitle, QLabel#speaker { color: #EFF0F7; font-size: 14px; font-weight: 600; }
-QLabel#topicTitle { color: #F0F0F8; font-size: 16px; font-weight: 600; }
-QLabel#bodyText { color: #C3C9D6; font-size: 13px; }
-QLabel#metricValue { color: #EEE9FC; font-size: 34px; font-weight: 700; }
-QLabel#metricTitle { color: #B3BCCB; font-size: 12px; }
-QLabel#metricNote { color: #8D98AB; font-size: 11px; }
-QLabel#pill { background: #2D2745; color: #BAA2FF; padding: 5px 9px; border-radius: 8px; font-size: 11px; }
-QFrame#card, QFrame#detailCard { background: #20252E; border: 1px solid #343B49; border-radius: 10px; }
-QWidget#conversationPane, QWidget#conversationBody { background: #1B2028; }
-QWidget#resultPane, QWidget#resultBody { background: #191E25; }
-QLabel#userBubble { background: #292F39; color: #E4E6EE; border-radius: 9px; padding: 14px; font-size: 14px; }
-QLabel#assistantBubble { background: #252B35; color: #D4D8E3; border-radius: 9px; padding: 15px; }
-QLabel#userAvatar { background: #8054F5; border-radius: 17px; }
-QLabel#aiAvatar { background: #20232E; border: 1px solid #8464C5; border-radius: 17px; }
-QLabel#agentAvatar { background: transparent; border: none; }
-QLabel#agentName { color: #98A2B5; font-size: 12px; }
-QPushButton#suggestionChip { background: #232936; border: 1px dashed #3E4859; border-radius: 15px; padding: 7px 14px; color: #B7C0D2; font-size: 12px; }
-QPushButton#suggestionChip:hover { border-color: #9F7DEF; color: #E6DDFF; background: #2A3040; }
-QFrame#stageCard { background: #202630; border: 1px solid #363F4D; border-radius: 9px; }
-QPushButton#stageToggle { background: transparent; border: none; padding: 1px 0; text-align: left; color: #E1E4EF; font-weight: 600; }
-QPushButton#stageToggle:hover { color: #C9D3E4; }
-QPushButton#msgAction { background: transparent; border: none; padding: 0; }
-QPushButton#msgAction:hover { background: #2C3442; border-radius: 6px; }
-QPushButton#retryAction { background: #2A3140; border: 1px solid #4A5568; color: #C9D3E4; padding: 4px 14px; border-radius: 6px; font-size: 12px; }
-QPushButton#retryAction:hover { border-color: #9F7DEF; background: #313A4B; }
-QPushButton#scrollBottom { background: #2A3140; border: 1px solid #46516A; color: #C7D0E2; padding: 6px 14px; border-radius: 15px; font-size: 12px; }
-QPushButton#scrollBottom:hover { background: #333D50; border-color: #5A6580; }
-QFrame#hotRow { background: #232936; border: 1px solid #2E3646; border-radius: 9px; }
-QFrame#hotRow:hover { background: #2A3140; border-color: #4A5568; }
-QLabel#hotRank { color: #6B7686; font-size: 12px; font-weight: 600; }
-QFrame#diagramCard { background: #232936; border: 1px solid #2E3646; border-radius: 9px; }
-QLabel#diagramImage { color: #C9D3E4; }
-QFrame#confirmCard { background: #232936; border: 1px solid #4A5568; border-radius: 9px; }
-QLabel#stepBadge { background: #272E39; color: #B0B8CA; border: 1px solid #475063; border-radius: 18px; font-size: 16px; }
-QLabel#stepBadge[active="true"] { background: #8054F5; border-color: #AD8AFF; color: white; }
-QLabel#stepTitle { color: #B9C0D0; font-size: 13px; }
-QLabel#stepTitle[active="true"] { color: #B49AFF; font-weight: 600; }
-QFrame#stepLine { background: #424B5E; }
-QFrame#composerBox { background: #202630; border: 1px solid #3D4554; border-radius: 11px; }
-QPlainTextEdit#composer { background: transparent; padding: 2px; color: #DEE1EB; }
-QFrame#topicCard { background: #1F252E; border: 1px solid #303844; border-radius: 9px; }
-QFrame#reasoningPanel { background: #1E242D; border: 1px solid #2C3441; border-radius: 9px; }
-QPushButton#reasoningToggle { background: transparent; border: none; padding: 1px 0; text-align: left; color: #9AA6B8; font-size: 12px; font-weight: 600; }
-QPushButton#reasoningToggle:hover { color: #C9D3E4; }
-QPlainTextEdit#reasoningText { background: transparent; color: #8B96A9; font-size: 12px; padding: 0; }
-QLabel#sourceCard { background: #272E38; color: #AAB3C5; border-radius: 8px; padding: 12px; font-size: 12px; }
-QLabel#warningCard { background: #342B1E; color: #E4BB76; border: 1px solid #755A30; border-radius: 8px; padding: 12px; font-size: 12px; }
-QLabel#materialPlaceholder { background: #242B35; color: #68758A; border: 1px dashed #434B59; border-radius: 7px; font-size: 11px; }
-QFrame#emptyPlan { border: 1px dashed #37404E; border-radius: 10px; background: #1D232B; }
-QLabel#emptyHeading { color: #AAB4C6; font-size: 17px; }
-QLineEdit { background: #222832; border: 1px solid #3B4453; border-radius: 7px; padding: 10px 12px; selection-background-color: #7253D7; }
-QLineEdit:focus { border-color: #946CF2; }
-QLineEdit:disabled { color: #6D778A; background: #1F252D; }
-QComboBox, QSpinBox { background: #222832; border: 1px solid #3B4453; border-radius: 7px; padding: 8px 10px; min-height: 20px; }
-QComboBox:hover, QSpinBox:hover { border-color: #57627A; }
-QComboBox:focus, QSpinBox:focus { border-color: #946CF2; }
-QComboBox::drop-down, QSpinBox::up-button, QSpinBox::down-button { border: none; width: 18px; }
-QComboBox QAbstractItemView { background: #222832; selection-background-color: #46366C; color: #DFE1EA; }
-QCheckBox { color: #ABB4C6; }
-QPushButton { background: #20262F; border: 1px solid #485265; border-radius: 7px; padding: 9px 12px; color: #CED4E2; }
-QPushButton:hover { border-color: #9F7DEF; background: #2B2B3E; }
-QPushButton:pressed { background: #39314F; }
-QPushButton:disabled { background: #20252C; color: #667082; border-color: #333B48; }
-QPushButton#primary { background: #8054F5; border-color: #9870FC; color: white; font-weight: 600; }
-QPushButton#primary:hover { background: #9268FF; }
-QPushButton#primary:pressed { background: #6840D6; }
-QPushButton#primary:disabled { background: #443662; border-color: #51416E; color: #8B80A4; }
-QPushButton#linkButton { background: transparent; border: none; color: #AF99E8; padding: 5px 3px; text-align: left; }
-QPushButton#windowControl { background: transparent; border: none; border-radius: 0; padding: 0; color: #ABB2C0; }
-QPushButton#windowControl:hover { background: #303641; color: white; }
-QPushButton#closeControl { background: transparent; border: none; border-radius: 0; padding: 0; color: #ABB2C0; }
-QPushButton#closeControl:hover { background: #A44357; color: white; }
-QTableView { background: #202630; alternate-background-color: #242B35; border: 1px solid #354050; border-radius: 8px; gridline-color: #303949; selection-background-color: #393153; selection-color: #D8C8FF; outline: none; }
-QTableView::item { padding: 9px 8px; border-bottom: 1px solid #303746; }
-QTableView::item:hover { background: #2A3240; }
-QHeaderView { background: #202630; }
-QHeaderView::section { background: #262D38; color: #A6B2C6; border: none; border-bottom: 1px solid #3A4352; padding: 12px 8px; font-size: 12px; }
-QTableView QTableCornerButton::section { background: #262D38; border: none; }
-QPlainTextEdit, QTextBrowser { background: #202630; border: none; color: #C2CCDC; padding: 8px; selection-background-color: #514173; }
-QPlainTextEdit#recordDetail { color: #C2CCDC; font-size: 13px; }
-QPlainTextEdit#enterpriseField { border: 1px solid #3B4453; border-radius: 7px; padding: 10px 12px; }
-QScrollArea, QScrollArea > QWidget { background: transparent; border: none; }
-QDialog { background: #1B2028; }
-QScrollBar:vertical { width: 8px; background: transparent; margin: 4px 0; }
-QScrollBar::handle:vertical { background: #4A566E; border-radius: 3px; min-height: 30px; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar:horizontal { height: 8px; background: transparent; }
-QScrollBar::handle:horizontal { background: #4A566E; border-radius: 3px; min-width: 30px; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-QSplitter::handle { background: #323945; }
-QSplitter::handle:hover { background: #4A5568; }
-QStatusBar { background: #171C23; color: #8793A8; border-top: 1px solid #303846; font-size: 11px; }
-QStatusBar::item { border: none; }
-QProgressBar { background: #2A303F; border: none; border-radius: 3px; height: 4px; }
-QProgressBar::chunk { background: #8A60FA; border-radius: 3px; }
-QMenuBar { background: #171C23; color: #A5AFBE; }
-QMenuBar::item:selected { background: #332D49; }
-QMenu { background: #222A35; border: 1px solid #465164; padding: 5px; }
-QMenu::item { padding: 8px 24px; }
-QMenu::item:selected { background: #40325F; color: #E3D6FF; }
-QToolTip { background: #313B4A; color: white; border: 1px solid #52607A; padding: 7px; }
-QTabWidget::pane { border: none; background: transparent; padding-top: 8px; }
-QTabBar::tab { background: transparent; color: #A7B0C1; padding: 12px 12px; border-bottom: 2px solid #303845; }
-QTabBar::tab:hover { color: #C6CFE0; }
-QTabBar::tab:selected { color: #B49AFF; border-bottom: 2px solid #9266F8; }
-"""
+from .appearance import THEMES, color, style_sheet, theme_name
+
+STYLE = style_sheet("light")
 
 
-
-def apply_theme(app):
+def apply_theme(app, mode="light"):
+    from PySide6.QtGui import QPalette
+    from PySide6.QtWidgets import QWidget
+    mode = mode if mode in THEMES else "light"
+    app.setProperty("scoutTheme", mode)
     app.setStyle("Fusion")
-    # The offscreen platform has no system font inventory on Windows.
     if not QFontDatabase.families() and os.name == "nt":
-        font = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "msyh.ttc"
-        if font.exists():
-            QFontDatabase.addApplicationFont(str(font))
-        symbols = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / "seguisym.ttf"
-        if symbols.exists():
-            QFontDatabase.addApplicationFont(str(symbols))
-    app.setFont(QFont("Microsoft YaHei UI" if os.name == "nt" else "Sans Serif", 10))
-    app.setStyleSheet(STYLE)
+        for filename in ("msyh.ttc", "seguisym.ttf"):
+            font = Path(os.environ.get("WINDIR", "C:/Windows")) / "Fonts" / filename
+            if font.exists():
+                QFontDatabase.addApplicationFont(str(font))
+    families = QFontDatabase.families()
+    candidates = ("SF Pro Text", "PingFang SC", "Microsoft YaHei UI", "Microsoft YaHei", "Segoe UI")
+    family = next((name for name in candidates if name in families), "Sans Serif")
+    app.setFont(QFont(family, 10))
+    palette = QPalette()
+    roles = {"Window": "window", "WindowText": "text", "Base": "surface", "AlternateBase": "subtle",
+             "Text": "text", "Button": "surface", "ButtonText": "text", "Highlight": "accent",
+             "HighlightedText": "on_accent", "ToolTipBase": "surface", "ToolTipText": "text",
+             "Link": "accent", "PlaceholderText": "muted", "BrightText": "on_accent"}
+    for role, name in roles.items():
+        palette.setColor(getattr(QPalette.ColorRole, role), QColor(color(name, mode)))
+    for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(color("disabled", mode)))
+    app.setPalette(palette)
+    app.setStyleSheet(style_sheet(mode))
+    for widget in app.allWidgets():
+        glyph = widget.property("themeGlyph")
+        if glyph:
+            size = widget.property("themeGlyphSize") or 22
+            widget.setPixmap(icon(glyph, size=size).pixmap(size, size))
+        agent_glyph = widget.property("agentGlyph")
+        if agent_glyph:
+            size = widget.property("agentGlyphSize") or 20
+            widget.setPixmap(agent_badge(None, agent_glyph, size).pixmap(size, size))
+        QWidget.update(widget)
+    return mode
 
 
-def icon(name, color="#9CB0D0", size=22):
+def _render_icon(name, color, size=22):
     result = QIcon()
     for mode, shade in ((QIcon.Mode.Normal, color), (QIcon.Mode.Selected, "#FFFFFF")):
         pixmap = QPixmap(size * 2, size * 2)
@@ -170,12 +69,19 @@ def icon(name, color="#9CB0D0", size=22):
                 p.drawPolygon(QPolygonF([QPointF(cx,cy-radius),QPointF(cx+radius*.3,cy-radius*.3),
                     QPointF(cx+radius,cy),QPointF(cx+radius*.3,cy+radius*.3),QPointF(cx,cy+radius),
                     QPointF(cx-radius*.3,cy+radius*.3),QPointF(cx-radius,cy),QPointF(cx-radius*.3,cy-radius*.3)]))
+        elif name == "source":
+            p.setPen(Qt.PenStyle.NoPen)
+            for x, y in ((5, 3), (11, 5), (9, 11), (3, 9)):
+                petal = QColor(shade)
+                petal.setAlphaF(0.85)
+                p.setBrush(petal)
+                p.drawEllipse(QRectF(x, y, 10, 10))
+            p.setBrush(QColor(THEMES[theme_name()]["surface"]))
+            p.drawEllipse(QRectF(9, 9, 6, 6))
         elif name == "send":
-            p.drawLine(3, 11, 21, 3)
-            p.drawLine(21, 3, 15, 21)
-            p.drawLine(15, 21, 10, 14)
-            p.drawLine(10, 14, 3, 11)
-            p.drawLine(10, 14, 21, 3)
+            p.drawLine(12, 19, 12, 5)
+            p.drawLine(6, 11, 12, 5)
+            p.drawLine(18, 11, 12, 5)
         elif name == "attach":
             p.drawArc(QRectF(6, 3, 10, 17), 200*16, 300*16)
             p.drawLine(9, 14, 15, 7)
@@ -210,7 +116,7 @@ def icon(name, color="#9CB0D0", size=22):
         elif name == "settings":
             for y, x in ((6, 9), (12, 16), (18, 7)):
                 p.drawLine(4, y, 20, y)
-                p.setBrush(QColor("#17233B"))
+                p.setBrush(QColor(THEMES[theme_name()]["surface"]))
                 p.drawEllipse(QRectF(x - 2, y - 2, 4, 4))
         elif name == "refresh":
             p.drawArc(QRectF(5, 5, 14, 14), 30 * 16, 290 * 16)
@@ -235,6 +141,27 @@ def icon(name, color="#9CB0D0", size=22):
         result.addPixmap(pixmap, mode)
     return result
 
+
+
+class _AdaptiveIconEngine(QIconEngine):
+    def __init__(self, name, fixed_color=None, size=22):
+        super().__init__()
+        self.name, self.fixed_color, self.size = name, fixed_color, size
+
+    def clone(self):
+        return _AdaptiveIconEngine(self.name, self.fixed_color, self.size)
+
+    def paint(self, painter, rect, mode, state):
+        shade = self.fixed_color or color("muted")
+        _render_icon(self.name, shade, max(rect.width(), rect.height())).paint(painter, rect, Qt.AlignmentFlag.AlignCenter, mode, state)
+
+    def pixmap(self, size, mode, state):
+        shade = self.fixed_color or color("muted")
+        return _render_icon(self.name, shade, max(size.width(), size.height())).pixmap(size, mode, state)
+
+
+def icon(name, color=None, size=22):
+    return QIcon(_AdaptiveIconEngine(name, color, size))
 
 def _paint_glyph(p, name):
     """24×24 坐标系下的线条图标；调用方负责缩放、描边颜色与粗细。"""
@@ -281,19 +208,19 @@ def _paint_glyph(p, name):
 
 
 def agent_badge(color, icon_name, size=34):
-    """发言人徽标：色底圆 + 白色矢量图标（不使用字体符号或表情）。"""
+    """Theme-aware member glyphs share the desktop accent and a quiet backing."""
     pixmap = QPixmap(size * 2, size * 2)
     pixmap.setDevicePixelRatio(2)
     pixmap.fill(Qt.GlobalColor.transparent)
     p = QPainter(pixmap)
     p.setRenderHint(QPainter.RenderHint.Antialiasing)
     p.setPen(Qt.PenStyle.NoPen)
-    p.setBrush(QColor(color))
+    p.setBrush(QColor(THEMES[theme_name()]["accent_soft"]))
     p.drawEllipse(QRectF(0.5, 0.5, size - 1, size - 1))
     glyph = size * 0.60
     p.translate((size - glyph) / 2, (size - glyph) / 2)
     p.scale(glyph / 24, glyph / 24)
-    p.setPen(QPen(QColor("#FFFFFF"), 2.0, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+    p.setPen(QPen(QColor(THEMES[theme_name()]["accent"]), 1.8, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
     p.setBrush(Qt.BrushStyle.NoBrush)
     _paint_glyph(p, icon_name)
     p.end()

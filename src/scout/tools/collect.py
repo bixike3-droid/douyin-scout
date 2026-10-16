@@ -45,7 +45,12 @@ async def _collect(ctx, args: dict) -> dict:
         result = await actions.collect(ctx, _emit_of(ctx), options)
     except ValueError as exc:
         return {"ok": False, "summary": str(exc)}
-    return {"ok": True, "summary": str(result.get("message") or "采集结束")}
+    report = result.get("report") or {}
+    partial = bool(report.get("partial") or report.get("failed") or report.get("blocked") or report.get("warnings"))
+    successful = int(report.get("ok") or 0) + int(report.get("cached") or 0)
+    ok = successful > 0 or not partial
+    return {"ok": ok, "partial": partial, "report": report,
+            "summary": str(result.get("message") or "采集结束")}
 
 
 register(ToolSpec(

@@ -18,18 +18,21 @@ def test_composer_enter_creates_real_task_and_new_draft_stays_empty(qt_app, ctx,
     store.save_profile(brief())
     service = DesktopService(ctx.paths)
     service.save_settings("sk-test-never-sent", "test-model")
-    client = FakeClient()
+    from test_workflow import WorkflowClient
+    client = WorkflowClient()
     monkeypatch.setattr(scout.llm, "DeepSeekClient", lambda cfg: client)
     window = MainWindow(service)
     window.show()
     try:
         pump(qt_app, lambda: window.initialized and settled(window))
         pane = window.enterprise
-        pane.composer.setPlainText("测试需求：针对周末散客提出两种内容表达")
+        request = "仅用已有数据，生成周末散客的传播方案"
+        pane.composer.setPlainText(request)
         QTest.keyClick(pane.composer, Qt.Key.Key_Return)
         pump(qt_app, lambda: pane.current_report is not None and settled(window))
-        assert client.calls[0][1]["evidence"][0]["data"]["request"] == "测试需求：针对周末散客提出两种内容表达"
-        assert window.recent_tasks.count() == 1
+        assert client.calls[0][1]["context"]["evidence"][0]["data"]["request"] == request
+        assert window.recent_tasks.count() == 2  # Conversation and its report.
+        assert pane.workflow_card.run["status"] == "partial"
         assert pane.plan_layout.count() > 4
         report_id = pane.current_report["id"]
         window.new_task_button.click()
@@ -93,13 +96,14 @@ def test_forms_and_custom_window_controls_close_with_application(qt_app, ctx):
     window.show()
     pump(qt_app, lambda: window.initialized and settled(window))
     window.enterprise.open_forms(0)
-    assert window.enterprise.forms_dialog.isVisible()
+    assert window.nav.currentRow() == 5
+    assert window.settings_tabs.currentIndex() == 1
     window.title_bar.toggle_maximized()
     assert window.isMaximized()
     window.title_bar.toggle_maximized()
     assert not window.isMaximized()
     window.close()
-    assert not window.isVisible() and not window.enterprise.forms_dialog.isVisible()
+    pump(qt_app, lambda: not window.isVisible())
 
 
 def test_team_bar_lists_members_without_manual_picking(qt_app):

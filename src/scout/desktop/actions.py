@@ -199,7 +199,8 @@ async def execute(paths, kind, emit, options=None):
                 confirm = broker.confirmer(emit)
             return await send(ctx, DeepSeekClient(ctx.config.llm), options.get("request", ""),
                 conversation_id=options.get("conversation_id"), want_plan=bool(options.get("want_plan")),
-                emit=emit, agent_id=options.get("agent"), confirm=confirm)
+                emit=emit, agent_id=options.get("agent"), confirm=confirm,
+                workflow_run_id=options.get("workflow_run_id"), rerun=bool(options.get("rerun")))
         if kind == "enterprise":
             from ..analyze.enterprise import generate
             from ..llm import DeepSeekClient
