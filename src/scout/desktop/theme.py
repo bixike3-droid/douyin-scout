@@ -130,6 +130,11 @@ def _render_icon(name, color, size=22):
         elif name == "copy":
             p.drawRoundedRect(QRectF(8, 3, 12, 14), 2, 2)
             p.drawRoundedRect(QRectF(4, 7, 12, 14), 2, 2)
+        elif name == "benchmark":
+            # 对标账号：双柱对比 + 基线
+            p.drawRoundedRect(QRectF(5, 12, 5, 8), 1.2, 1.2)
+            p.drawRoundedRect(QRectF(14, 6, 5, 14), 1.2, 1.2)
+            p.drawLine(3, 20.5, 21, 20.5)
         elif name == "stop":
             p.setBrush(QColor(shade))
             p.drawRoundedRect(QRectF(7, 7, 10, 10), 2.5, 2.5)

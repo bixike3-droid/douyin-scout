@@ -96,7 +96,7 @@ def test_forms_and_custom_window_controls_close_with_application(qt_app, ctx):
     window.show()
     pump(qt_app, lambda: window.initialized and settled(window))
     window.enterprise.open_forms(0)
-    assert window.nav.currentRow() == 5
+    assert window.nav.currentRow() == 6
     assert window.settings_tabs.currentIndex() == 1
     original = window.geometry()
     window.title_bar.toggle_maximized()
@@ -146,6 +146,27 @@ def test_window_edge_hit_returns_resize_edges(qt_app, ctx):
         assert window._hit_edges(right_mid) == Qt.Edge.RightEdge
         center = window.mapToGlobal(QPoint(window.width() // 2, window.height() // 2))
         assert window._hit_edges(center) is None
+    finally:
+        window.close()
+        pump(qt_app, lambda: not window.isVisible())
+
+
+def test_benchmark_page_lists_accounts_and_adds_from_link(qt_app, ctx):
+    """第 6 个导航位是对标账号页：粘贴链接添加后出现在名单与详情里。"""
+    from scout.desktop.window import MainWindow
+    window = MainWindow(DesktopService(ctx.paths))
+    window.show()
+    try:
+        pump(qt_app, lambda: window.initialized and settled(window))
+        window.nav.setCurrentRow(5)
+        pump(qt_app, lambda: settled(window))
+        assert window.stack.currentWidget() is window.benchmark
+        assert "对标" in window.heading.text()
+        uid = "MS4wLjABAAAAtestpage000000000001"
+        window._add_benchmark(f"https://www.douyin.com/user/{uid}")
+        pump(qt_app, lambda: settled(window) and len(window.benchmark.accounts) == 1)
+        assert window.benchmark.accounts_list.count() == 1
+        assert uid in window.benchmark.detail_meta.text()
     finally:
         window.close()
         pump(qt_app, lambda: not window.isVisible())

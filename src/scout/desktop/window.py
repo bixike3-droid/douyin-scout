@@ -22,6 +22,7 @@ from .components import MetricCard, TaskSummary, ElidedLabel, card, text
 from .theme import apply_theme, icon
 from .appearance import THEMES, color
 from .operations import Operations
+from .benchmark import BenchmarkPage
 from .harness import HarnessPage, TitleBar
 from .enterprise import report_time
 from .motion import fade_in
@@ -34,7 +35,8 @@ LABELS = {
     "full": "已触底", "sampled": "采样完成", "partial": "部分完成", "empty": "正常为空", "error": "异常",
 }
 PAGES = [("传播工作台", "enterprise"), ("作品数据", "works"), ("互动者", "users"),
-         ("历史分析", "analyses"), ("采集任务", "tasks"), ("设置", "settings"), ("数据概览", "overview")]
+         ("历史分析", "analyses"), ("采集任务", "tasks"), ("对标账号", "benchmark"),
+         ("设置", "settings"), ("数据概览", "overview")]
 COLUMNS = {
     "works": [("作品标题", "description"), ("播放", "play_count"), ("点赞", "digg_count"), ("评论", "comment_count"),
               ("转发", "share_count"), ("发布时间", "create_time")],
@@ -407,7 +409,7 @@ class MainWindow(QMainWindow):
         self.nav.setIconSize(QSize(20, 20))
         for name, key in PAGES:
             self.nav.addItem(QListWidgetItem(icon(key), name))
-        self.nav.setFixedHeight(308)
+        self.nav.setFixedHeight(352)
         side_layout.addWidget(self.nav)
         profile_button = QPushButton("企业资料    ›")
         profile_button.setObjectName("linkButton")
@@ -481,6 +483,11 @@ class MainWindow(QMainWindow):
             pane.layout().setContentsMargins(28, 12, 28, 20)
             self.records[key] = pane
             self.stack.addWidget(pane)
+        self.benchmark = BenchmarkPage()
+        self.benchmark.check_requested.connect(self._check_benchmarks)
+        self.benchmark.add_requested.connect(self._add_benchmark)
+        self.benchmark.remove_requested.connect(self._remove_benchmark)
+        self.stack.addWidget(self.benchmark)
         self._build_operation_controls()
         self.stack.addWidget(self._settings_page())
         self.stack.addWidget(self._overview_page())
@@ -647,7 +654,8 @@ class MainWindow(QMainWindow):
         self.heading.setText(PAGES[index][0])
         subtitles = ["结合企业特色与作品表现，制定下一步传播动作。", "查看当前账号作品，缺失指标可在推广页补录。",
                      "了解与作品互动的人，资料来自已采集的公开信息。", "阅读已有画像、作品评价与内容计划。",
-                     "追踪任务状态，定位采集过程中的问题。", "管理分析服务与本地工作空间。", "查看原始账号数据、采集质量和运行记录。"]
+                     "追踪任务状态，定位采集过程中的问题。", "登记对标账号，检查他们的最新作品。",
+                     "管理分析服务与本地工作空间。", "查看原始账号数据、采集质量和运行记录。"]
         self.subtitle.setText(subtitles[index])
         self.stack.setCurrentIndex(index)
         self.page_header.setVisible(index != 0)
@@ -734,10 +742,10 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("请等待当前操作结束")
             return
         if kind in ("profile", "review", "plan", "enterprise", "chat") and not self.has_key:
-            self.nav.setCurrentRow(5)
+            self.nav.setCurrentRow(6)
             self.statusBar().showMessage("请先配置自己的 DeepSeek Key")
             return
-        if kind == "collect" and not self.login_saved:
+        if kind in ("collect", "benchmark") and not self.login_saved:
             self.statusBar().showMessage("请先点击窗口顶部的「登录抖音」")
             self.login_button.setFocus()
             return
@@ -891,6 +899,8 @@ class MainWindow(QMainWindow):
                 self.jobs.submit(lambda: (key, search, self.service.page(key, search, page, segment)))
             else:
                 self.jobs.submit(lambda: (key, search, self.service.page(key, search, page)))
+        elif key == "benchmark":
+            self.jobs.submit(lambda: ("benchmark", None, self.service.benchmarks()))
         else:
             self.jobs.submit(lambda: ("overview", None, self.service.overview()))
 
@@ -941,6 +951,31 @@ class MainWindow(QMainWindow):
 
     def _navigate_key(self, key):
         self.nav.setCurrentRow(next(i for i, item in enumerate(PAGES) if item[1] == key))
+
+    def _check_benchmarks(self, sec_uid):
+        self._start_operation("benchmark", {"sec_uid": sec_uid or None})
+
+    def _add_benchmark(self, text):
+        try:
+            result = self.service.add_benchmark(text)
+        except ValueError as exc:
+            self.statusBar().showMessage(str(exc), 8000)
+            return
+        self.statusBar().showMessage("已添加对标账号" if result["created"] else "该账号已在名单中", 6000)
+        if self.nav.currentRow() == 5:
+            self.refresh()
+
+    def _remove_benchmark(self, sec_uid):
+        account = next((a for a in self.benchmark.accounts if a["sec_uid"] == sec_uid), None)
+        name = (account or {}).get("display_name") or sec_uid[:14]
+        answer = QMessageBox.question(
+            self, "移出对标名单", f"将「{name}」移出对标名单？已采集的作品数据不受影响。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self.service.remove_benchmark(sec_uid)
+        if self.nav.currentRow() == 5:
+            self.refresh()
 
     def _new_enterprise_task(self):
         self.nav.setCurrentRow(0)
@@ -1089,7 +1124,7 @@ class MainWindow(QMainWindow):
                     else:
                         self.conversation_to_load = None
                         self.ui_preferences.remove("lastConversation")
-            elif self.nav.currentRow() not in (5, 6):
+            elif self.nav.currentRow() not in (6, 7):
                 self.pending = True
             if not self.enterprise.hot_panel.loaded_once:
                 QTimer.singleShot(300, self._load_hot_board)
@@ -1116,6 +1151,8 @@ class MainWindow(QMainWindow):
         elif key == "hotboard":
             self.enterprise.hot_panel.apply(data)
             return
+        elif key == "benchmark":
+            self.benchmark.apply(data)
         elif self.records[key].search.text() == search:
             self.records[key].apply(data)
         else:
@@ -1142,6 +1179,7 @@ class MainWindow(QMainWindow):
         self.enterprise.set_controls_enabled(self.initialized and not active)
         self.new_task_button.setEnabled(self.initialized and not active)
         self.recent_tasks.setEnabled(self.initialized and not active)
+        self.benchmark.setEnabled(self.initialized and not active)
         self.refresh_action.setEnabled(not busy)
         self.refresh_button.setEnabled(not busy)
         self.save_button.setEnabled(not active)

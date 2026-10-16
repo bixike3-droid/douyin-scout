@@ -184,8 +184,83 @@ async def analyze(ctx, kind, emit, options):
     return {"message": "作品评价已保存" if kind == "review" else "内容计划已保存"}
 
 
+async def check_benchmarks(ctx, emit, options):
+    """逐个检查对标账号最近作品：复用作品采集器，采集前后差集 = 新增。"""
+    from ..collect.user_works_api import UserWorksApiCollector
+    from ..store.benchmark import Benchmarks
+    from ..store.collection import CollectionQueue
+
+    if not login_status(ctx.paths)["saved"]:
+        raise ValueError("请先点击窗口顶部的「登录抖音」")
+    store = Benchmarks(ctx.db)
+    accounts = store.list()
+    if options.get("sec_uid"):
+        accounts = [a for a in accounts if a["sec_uid"] == options["sec_uid"]]
+    if not accounts:
+        raise ValueError("对标名单为空，请先在「对标账号」页添加账号")
+    tier = next((t.name for t in ctx.config.tiers.values() if t.enabled and t.mode == "logged_in"), None)
+    if not tier:
+        raise ValueError("没有启用登录账号")
+    tiers = dict(ctx.config.tiers)
+    tiers[tier] = replace(tiers[tier], use_storage_state=True)
+    ctx.config = replace(ctx.config, tiers=tiers, browser=replace(ctx.config.browser, cdp_url=""))
+    queue = CollectionQueue(ctx)
+    limit = max(1, int(options.get("limit") or 12))
+    lines: list[str] = []
+    total_new = 0
+    for index, account in enumerate(accounts, 1):
+        uid = account["sec_uid"]
+        name = account.get("display_name") or uid[:14]
+        emit({"message": f"正在检查对标账号 {name}（{index}/{len(accounts)}）…"})
+        known = {row["aweme_id"] for row in ctx.db.query(
+            "SELECT aweme_id FROM works WHERE author_sec_uid=?", (uid,))}
+        task = queue.claim("fetch_user_works", uid, tier)
+        if task is None:
+            lines.append(f"{name}：任务排队中，本次跳过")
+            continue
+        collector = UserWorksApiCollector(ctx)
+        collector.on_progress = emit
+        try:
+            outcome = await collector.run({**task, "_item_limit": limit, "_api_cadence": True,
+                                           "_resume": False, "_hint": ""})
+        except asyncio.CancelledError:
+            queue.release(task)
+            raise
+        error = str(outcome.error or "")
+        if outcome.ok:
+            ctx.tasks.complete(task["id"])
+        elif outcome.blocked:
+            queue.release(task)
+            store.mark_checked(uid, 0, f"采集受阻：{error}")
+            lines.append(f"{name}：采集受阻（{error[:60]}）")
+            break
+        else:
+            if error.startswith("达到页数上限"):
+                queue.release(task)
+            else:
+                ctx.tasks.fail(task["id"], error, retry=True)
+            store.mark_checked(uid, 0, error)
+            lines.append(f"{name}：采集未完成（{error[:60]}）")
+            if "status_code=8" in error:
+                emit({"message": "登录态已失效，请重新登录后再试"})
+                break
+            continue
+        fresh = {row["aweme_id"] for row in ctx.db.query(
+            "SELECT aweme_id FROM works WHERE author_sec_uid=?", (uid,))}
+        new_ids = fresh - known
+        total_new += len(new_ids)
+        store.mark_checked(uid, len(new_ids))
+        line = f"{name}：新增 {len(new_ids)} 条" if new_ids else f"{name}：无新增"
+        lines.append(line)
+        emit({"message": line})
+    summary = f"对标检查完成，共新增 {total_new} 条。"
+    if lines:
+        summary += " " + "；".join(lines[:8])
+    return {"message": summary, "report": {"accounts": len(accounts), "new_works": total_new}}
+
+
 async def execute(paths, kind, emit, options=None):
-    if kind not in ("login", "collect", "profile", "review", "plan", "enterprise", "chat"):
+    if kind not in ("login", "collect", "profile", "review", "plan", "enterprise", "chat", "benchmark"):
         raise ValueError("未知操作")
     ctx = AppContext.create(load_config(paths))
     try:
@@ -211,6 +286,8 @@ async def execute(paths, kind, emit, options=None):
             return await login(ctx, emit)
         if kind == "collect":
             return await collect(ctx, emit, options or {})
+        if kind == "benchmark":
+            return await check_benchmarks(ctx, emit, options or {})
         return await analyze(ctx, kind, emit, options or {})
     finally:
         try:

@@ -40,6 +40,29 @@ class DesktopService:
         with Database.open(self.paths.db_path, read_only=True) as db:
             return DesktopStore(db).page(view, search, page, segment)
 
+    def benchmarks(self):
+        from ..store.benchmark import Benchmarks
+        with Database.open(self.paths.db_path, read_only=True) as db:
+            store = Benchmarks(db)
+            accounts = store.list()
+            for account in accounts:
+                account["works"] = store.works(account["sec_uid"], limit=20)
+        return accounts
+
+    def add_benchmark(self, text):
+        from ..store.benchmark import Benchmarks, parse_sec_uid
+        sec_uid = parse_sec_uid(text)
+        if not sec_uid:
+            raise ValueError("无法识别：请粘贴对标账号的主页链接，或直接粘贴 sec_uid")
+        with Database.open(self.paths.db_path) as db:
+            created = Benchmarks(db).add(sec_uid)
+        return {"created": created, "sec_uid": sec_uid}
+
+    def remove_benchmark(self, sec_uid):
+        from ..store.benchmark import Benchmarks
+        with Database.open(self.paths.db_path) as db:
+            Benchmarks(db).remove(sec_uid)
+
     def enterprise_workspace(self):
         with Database.open(self.paths.db_path, read_only=True) as db:
             return EnterpriseStore(db).workspace()
