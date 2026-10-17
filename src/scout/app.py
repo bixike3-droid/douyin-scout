@@ -19,6 +19,7 @@ from .paths import Paths
 from .store.cache import AbstractCache, make_cache
 from .store.raw_archive import RawArchive
 from .store.repo import (
+    Comments,
     Cursors,
     LikeEdges,
     LLMResults,
@@ -41,6 +42,7 @@ class AppContext:
     users: Users
     works: Works
     like_edges: LikeEdges
+    comments: Comments
     snapshots: UserSnapshots
     notice_runs: NoticeRuns
     llm_results: LLMResults
@@ -80,6 +82,7 @@ class AppContext:
             users=Users(db),
             works=Works(db),
             like_edges=LikeEdges(db),
+            comments=Comments(db),
             snapshots=UserSnapshots(db),
             notice_runs=NoticeRuns(db),
             llm_results=LLMResults(db),

@@ -30,6 +30,8 @@ class ParseResult:
     users: list[dict[str, Any]] = field(default_factory=list)
     works: list[dict[str, Any]] = field(default_factory=list)
     like_edges: list[dict[str, Any]] = field(default_factory=list)
+    # 评论：每条必须带 aweme_id（归口约定，不留无主数据）。
+    comments: list[dict[str, Any]] = field(default_factory=list)
     # 每条通知的元信息（哪个作品、聚合了多少人、名单是否完整）。
     # 用来把 DOM 上第 N 个「等 M 人赞了…」映射到具体作品。
     notices: list[dict[str, Any]] = field(default_factory=list)
@@ -39,12 +41,13 @@ class ParseResult:
     parser_name: str = ""
 
     def is_empty(self) -> bool:
-        return not (self.users or self.works or self.like_edges)
+        return not (self.users or self.works or self.like_edges or self.comments)
 
     def merge(self, other: "ParseResult") -> "ParseResult":
         self.users.extend(other.users)
         self.works.extend(other.works)
         self.like_edges.extend(other.like_edges)
+        self.comments.extend(other.comments)
         self.notices.extend(other.notices)
         self.notes.extend(other.notes)
         if other.cursor:
@@ -61,6 +64,7 @@ class ParseResult:
             "users": len(self.users),
             "works": len(self.works),
             "like_edges": len(self.like_edges),
+            "comments": len(self.comments),
             "notices": len(self.notices),
             "cursor": self.cursor,
             "notes": self.notes[:5],
@@ -426,4 +430,67 @@ def _parse_user_works(url: str, payload: Any) -> ParseResult:
 def _parse_profile(url: str, payload: Any) -> ParseResult:
     result = ParseResult(url=url, kind="profile")
     result.users = extract_users(payload)
+    return result
+
+
+@parser("douyin.comments", "/aweme/v1/web/comment/list")
+def _parse_comments(url: str, payload: Any) -> ParseResult:
+    """解析作品评论区（/aweme/v1/web/comment/list/）。
+
+    第一版按公开 web 结构实现（2026-10-17）::
+
+        { "comments": [ { "cid", "text", "aweme_id", "create_time",
+                           "digg_count", "reply_comment_total", "user": {...} } ],
+          "cursor": 20, "has_more": 1, "total": 41 }
+
+    尚未用真实登录账号核验；真机字段若变化，在这里改解析器即可，
+    采集层不感知。评论一律带 aweme_id（归口约定）。
+    """
+    from .extract import normalize_user
+    from urllib.parse import parse_qs, urlparse
+
+    result = ParseResult(url=url, kind="comments")
+    if not isinstance(payload, dict):
+        return result
+
+    try:
+        aweme_id = (parse_qs(urlparse(url).query).get("aweme_id") or [""])[0]
+    except Exception:
+        aweme_id = ""
+
+    items = payload.get("comments")
+    if not isinstance(items, list):
+        result.notes.append("comment/list 里没有 comments，接口结构可能变了")
+        return result
+
+    for raw in items:
+        if not isinstance(raw, dict):
+            continue
+        comment_id = str(raw.get("cid") or raw.get("comment_id") or "")
+        if not comment_id:
+            continue
+        user_payload = raw.get("user") if isinstance(raw.get("user"), dict) else {}
+        record = normalize_user(user_payload) if user_payload else {}
+        sec_uid = record.get("sec_uid") or str(raw.get("sec_uid") or "")
+        if record.get("sec_uid"):
+            result.users.append(record)
+        result.comments.append(
+            {
+                "comment_id": comment_id,
+                "aweme_id": aweme_id or str(raw.get("aweme_id") or ""),
+                "sec_uid": sec_uid,
+                "text": str(raw.get("text") or "").strip(),
+                "digg_count": raw.get("digg_count"),
+                "reply_count": raw.get("reply_comment_total", raw.get("reply_count")),
+                "create_time": raw.get("create_time"),
+            }
+        )
+
+    result.cursor = {
+        "cursor": payload.get("cursor"),
+        "has_more": bool(payload.get("has_more")),
+        "total": payload.get("total"),
+    }
+    if not result.comments:
+        result.notes.append("comment/list 没解析出评论；检查 comments / user 字段是否改名")
     return result

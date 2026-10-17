@@ -275,6 +275,12 @@ class TargetsConfig:
     # 单个作品最多翻多少页（50 × 40 = 2000 人）。防止某个爆款把请求量拉爆。
     likers_max_pages: int = 40
 
+    # ── 评论接口（/aweme/v1/web/comment/list/，P2.3 阶段 2）──
+    # 第一版按公开 web 结构实现：cursor 为偏移、has_more 表示还有下一页。
+    comments_page_size: int = 20
+    # 单作品最多翻多少页（20 × 20 = 400 条安全阀；实际预算由抽样策略决定）
+    comments_max_pages: int = 20
+
     # ── 作品列表接口（/aweme/v1/web/aweme/post/）──
     # 同样是页面内 fetch、不需要签名。这是 AI 画像的原料。
     works_page_size: int = 18

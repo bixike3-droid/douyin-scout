@@ -32,7 +32,7 @@ LABELS = {
     "pending": "待处理", "running": "执行中", "done": "已完成", "failed": "失败",
     "blocked": "已暂停", "profile": "互动者画像", "review": "作品评价", "plan": "内容计划",
     "fetch_self": "识别账号", "fetch_notice": "互动通知", "fetch_likers": "点赞人名单",
-    "fetch_user_works": "用户作品", "fetch_profile": "公开资料", "fetch_works": "作品列表",
+    "fetch_comments": "评论区", "fetch_user_works": "用户作品", "fetch_profile": "公开资料", "fetch_works": "作品列表",
     "full": "已触底", "sampled": "采样完成", "partial": "部分完成", "empty": "正常为空", "error": "异常",
 }
 PAGES = [("传播工作台", "enterprise"), ("作品数据", "works"), ("互动者", "users"),
@@ -314,15 +314,10 @@ class MainWindow(QMainWindow):
         appearance = str(self.ui_preferences.value("appearance", "light"))
         self.appearance_pref = appearance if appearance in ("light", "dark", "auto") else "light"
         self.appearance_mode = self._system_appearance() if self.appearance_pref == "auto" else self.appearance_pref
-        # Win11 22H2+：Mica 背景板需要窗口本体可透明；旧系统 / 离屏环境保持纯色。
+        # Mica 背景板暂缓启用（2026-10-17 真机验证）：WA_TranslucentBackground 会把窗口
+        # 变成分层窗口（WS_EX_LAYERED），标题栏拖动 / 系统命中链路失效。
+        # winapi.apply_backdrop 保留，待找到不破坏输入链路的方案后再接回（默认关）。
         self._backdrop_enabled = False
-        try:
-            from .winapi import available, backdrop_supported
-            self._backdrop_enabled = available() and backdrop_supported()
-        except Exception:
-            self._backdrop_enabled = False
-        if self._backdrop_enabled:
-            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         apply_theme(QApplication.instance(), self.appearance_mode, self._backdrop_enabled)
         try:
             QApplication.instance().styleHints().colorSchemeChanged.connect(self._system_scheme_changed)

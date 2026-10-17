@@ -466,6 +466,78 @@ class LikeEdges:
         }
 
 
+# ── 评论（P2.3 阶段 2）─────────────────────────────────────────
+
+
+class Comments:
+    """作品评论：按作品归口（aweme_id），按评论 id 幂等去重。
+
+    评论会变化（点赞涨、被删）：这里只做“见过的都留着、再见过就刷新”，
+    不存没有作品的评论（归口约定）。
+    """
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    @staticmethod
+    def _clean_int(value: Any) -> int | None:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return None
+
+    def upsert_many(self, records: Iterable[dict[str, Any]], *, raw_blob_id: int | None = None) -> int:
+        now = iso()
+        rows = []
+        for record in records:
+            comment_id = str(record.get("comment_id") or "").strip()
+            aweme_id = str(record.get("aweme_id") or "").strip()
+            if not comment_id or not aweme_id:
+                continue
+            rows.append(
+                (
+                    comment_id,
+                    aweme_id,
+                    str(record.get("sec_uid") or ""),
+                    str(record.get("text") or ""),
+                    self._clean_int(record.get("digg_count")),
+                    self._clean_int(record.get("reply_count")),
+                    self._clean_int(record.get("create_time")),
+                    now,
+                    now,
+                    raw_blob_id,
+                )
+            )
+        if not rows:
+            return 0
+        before = self.db.scalar("SELECT COUNT(*) FROM comments", default=0)
+        self.db.execute_many(
+            "INSERT INTO comments (comment_id, aweme_id, sec_uid, text, digg_count, "
+            "reply_count, create_time, first_seen_at, last_seen_at, raw_blob_id) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(comment_id) DO UPDATE SET "
+            "text=excluded.text, "
+            "digg_count=COALESCE(excluded.digg_count, comments.digg_count), "
+            "reply_count=COALESCE(excluded.reply_count, comments.reply_count), "
+            "last_seen_at=excluded.last_seen_at, "
+            "raw_blob_id=COALESCE(excluded.raw_blob_id, comments.raw_blob_id)",
+            rows,
+        )
+        after = self.db.scalar("SELECT COUNT(*) FROM comments", default=0)
+        return int(after) - int(before)
+
+    def list_for_work(self, aweme_id: str, limit: int = 100) -> list[dict[str, Any]]:
+        return self.db.rows_as_dicts(
+            "SELECT * FROM comments WHERE aweme_id=? "
+            "ORDER BY digg_count DESC NULLS LAST, create_time DESC LIMIT ?",
+            (aweme_id, max(1, int(limit))),
+        )
+
+    def count_for_work(self, aweme_id: str) -> int:
+        return int(self.db.scalar(
+            "SELECT COUNT(*) FROM comments WHERE aweme_id=?", (aweme_id,), default=0))
+
+
 # ── 任务队列 ─────────────────────────────────────────────────
 
 

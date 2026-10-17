@@ -159,6 +159,12 @@ targets:
   sampling_floor: 20
   sampling_cap: 100
   sampling_all_below: 30
+
+  # ── 评论接口（P2.3 阶段 2）──
+  # 第一版按公开 web 结构实现（cursor 为偏移、has_more 表示还有下一页）；
+  # 实际采集预算由上面的抽样策略按作品评论量自动决定。
+  comments_page_size: 20
+  comments_max_pages: 20
   home_url: "https://www.douyin.com"
   notice_url: "https://www.douyin.com/user/self?from_tab_name=main&showTab=post"
   notice_url_candidates:
