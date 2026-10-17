@@ -7,7 +7,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl, QSize, QEvent, QSettings
+from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl, QSize, QEvent, QSettings, Signal
 from PySide6.QtGui import QAction, QDesktopServices, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFrame, QGridLayout, QHBoxLayout,
@@ -126,11 +126,15 @@ class RecordsModel(QAbstractTableModel):
 
 
 class RecordsPage(QWidget):
+    work_selected = Signal(str)
+    collect_comments_requested = Signal(str)
+
     def __init__(self, key, request, parent=None):
         super().__init__(parent)
         self.key = key
         self.page = 0
         self.total = 0
+        self.selected_id = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         description = label(DESCRIPTIONS[key])
@@ -182,6 +186,11 @@ class RecordsPage(QWidget):
         detail_card, detail_layout = card("记录详情", "选择左侧记录，查看内容与数据来源。")
         detail_card.setMinimumWidth(260)
         detail_layout.addWidget(self.detail, 1)
+        self.comments_button = QPushButton("采集评论区")
+        self.comments_button.setToolTip("按抽样预算采集这条作品的评论区（需登录态）")
+        self.comments_button.setVisible(False)
+        self.comments_button.clicked.connect(self._collect_comments)
+        detail_layout.addWidget(self.comments_button)
         self.detail_toggle.toggled.connect(detail_card.setVisible)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.addWidget(self.table)
@@ -228,6 +237,8 @@ class RecordsPage(QWidget):
 
     def apply(self, data):
         self.page = data["page"]
+        self.selected_id = None
+        self.comments_button.setVisible(False)
         self.model.replace(data["rows"])
         self.empty.setText("没有匹配的记录\n试试其他名称或标识。" if self.search.text() else "这里还没有记录\n采集或导入后，数据会显示在这里。")
         self.empty.setVisible(not data["rows"])
@@ -242,9 +253,16 @@ class RecordsPage(QWidget):
     def _selection(self):
         selected = self.table.selectionModel().selectedRows()
         if not selected:
+            self.selected_id = None
+            self.comments_button.setVisible(False)
             self.detail.clear()
             return
         record = dict(self.model.rows[selected[0].row()])
+        if self.key == "works":
+            self.selected_id = str(record.get("aweme_id") or "") or None
+            self.comments_button.setVisible(bool(self.selected_id))
+            if self.selected_id:
+                self.work_selected.emit(self.selected_id)
         lines = [f"{title}：{display_value(key, record.get(key))}" for title, key in COLUMNS[self.key]]
         extra = {
             "works": [("统计采集时间", "stats_fetched_at"), ("作品标识", "aweme_id"), ("收藏", "collect_count"), ("统计备注", "stats_anomaly"), ("指标来源与时间", "metric_note")],
@@ -304,6 +322,23 @@ class RecordsPage(QWidget):
             except (TypeError, ValueError):
                 lines.append("报告内容无法解析，请检查原始分析结果。")
         self.detail.setPlainText("\n\n".join(lines))
+
+    def _collect_comments(self):
+        if self.selected_id:
+            self.collect_comments_requested.emit(self.selected_id)
+
+    def apply_comments(self, data):
+        """评论区数据回填详情（选中作品未被切走时生效）。"""
+        if self.key != "works" or not self.selected_id:
+            return
+        if str(data.get("aweme_id") or "") != self.selected_id:
+            return
+        items = data.get("items") or []
+        lines = ["", f"评论区：已采 {len(items)} 条（按点赞排序）" if items else "评论区：尚未采集"]
+        for row in items[:10]:
+            text = str(row.get("text") or "").replace("\n", " ").strip()[:60]
+            lines.append(f"· 赞 {row.get('digg_count') or 0} · 回复 {row.get('reply_count') or 0} · {text}")
+        self.detail.appendPlainText("\n".join(lines))
 
 
 class MainWindow(QMainWindow):
@@ -520,6 +555,8 @@ class MainWindow(QMainWindow):
             pane.layout().setContentsMargins(28, 12, 28, 20)
             self.records[key] = pane
             self.stack.addWidget(pane)
+        self.records["works"].work_selected.connect(self._load_work_comments)
+        self.records["works"].collect_comments_requested.connect(self._collect_work_comments)
         self.benchmark = BenchmarkPage()
         self.benchmark.check_requested.connect(self._check_benchmarks)
         self.benchmark.add_requested.connect(self._add_benchmark)
@@ -783,7 +820,7 @@ class MainWindow(QMainWindow):
             self.nav.setCurrentRow(6)
             self.statusBar().showMessage("请先配置自己的 DeepSeek Key")
             return
-        if kind in ("collect", "benchmark") and not self.login_saved:
+        if kind in ("collect", "benchmark", "comments") and not self.login_saved:
             self.statusBar().showMessage("请先点击窗口顶部的「登录抖音」")
             self.login_button.setFocus()
             return
@@ -990,6 +1027,14 @@ class MainWindow(QMainWindow):
 
     def _navigate_key(self, key):
         self.nav.setCurrentRow(next(i for i, item in enumerate(PAGES) if item[1] == key))
+
+    def _load_work_comments(self, aweme_id):
+        if self.closing or not self.initialized or self.jobs.busy or self.operations.busy:
+            return
+        self.jobs.submit(lambda: ("work_comments", aweme_id, self.service.comments(aweme_id)))
+
+    def _collect_work_comments(self, aweme_id):
+        self._start_operation("comments", {"aweme_id": aweme_id})
 
     def _check_benchmarks(self, sec_uid):
         self._start_operation("benchmark", {"sec_uid": sec_uid or None})
@@ -1214,6 +1259,8 @@ class MainWindow(QMainWindow):
             return
         elif key == "benchmark":
             self.benchmark.apply(data)
+        elif key == "work_comments":
+            self.records["works"].apply_comments(data)
         elif self.records[key].search.text() == search:
             self.records[key].apply(data)
         else:

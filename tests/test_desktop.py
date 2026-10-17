@@ -98,6 +98,26 @@ def test_records_detail_shows_linked_records(qt_app, ctx):
     assert "已采点赞人" in text and "观众甲" in text
 
 
+def test_work_detail_offers_comment_collection(qt_app, ctx):
+    """作品详情：选中即请求评论区数据，按钮可触发采集（信号）。"""
+    from scout.desktop.window import RecordsPage
+    ctx.works.upsert({"aweme_id": "w1", "description": "校园视频", "is_mine": 1, "comment_count": 30})
+    page = RecordsPage("works", lambda: None)
+    requested, collected = [], []
+    page.work_selected.connect(requested.append)
+    page.collect_comments_requested.connect(collected.append)
+    page.apply(DesktopStore(ctx.db).page("works"))
+    assert page.comments_button.isHidden()
+    page.table.selectRow(0)
+    assert requested == ["w1"] and not page.comments_button.isHidden()
+    page.comments_button.click()
+    assert collected == ["w1"]
+    page.apply_comments({"aweme_id": "w1", "items": [
+        {"text": "好评", "digg_count": 3, "reply_count": 1, "sec_uid": "u1"}]})
+    text = page.detail.toPlainText()
+    assert "评论区" in text and "好评" in text
+
+
 def test_latest_analysis_is_unique_when_timestamps_tie(ctx):
     for digest in ("first", "second"):
         ctx.llm_results.save(subject_kind="user", subject_id="a", task="profile",

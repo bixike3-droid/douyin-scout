@@ -259,8 +259,60 @@ async def check_benchmarks(ctx, emit, options):
     return {"message": summary, "report": {"accounts": len(accounts), "new_works": total_new}}
 
 
+async def collect_comments(ctx, emit, options):
+    """采集单条作品的评论区：登录态 + 抽样预算 + 幂等入库。"""
+    from ..collect.comments import CommentsCollector
+    from ..store.collection import CollectionQueue
+
+    if not login_status(ctx.paths)["saved"]:
+        raise ValueError("请先点击窗口顶部的「登录抖音」")
+    aweme_id = str(options.get("aweme_id") or "")
+    if not aweme_id:
+        raise ValueError("缺少作品标识")
+    work = ctx.works.get(aweme_id) or {}
+    if not work:
+        raise ValueError("本地没有这条作品的记录，请先采集作品")
+    tier = next((t.name for t in ctx.config.tiers.values() if t.enabled and t.mode == "logged_in"), None)
+    if not tier:
+        raise ValueError("没有启用登录账号")
+    tiers = dict(ctx.config.tiers)
+    tiers[tier] = replace(tiers[tier], use_storage_state=True)
+    ctx.config = replace(ctx.config, tiers=tiers, browser=replace(ctx.config.browser, cdp_url=""))
+    title = str(work.get("description") or aweme_id)[:20]
+    emit({"message": f"正在采集评论区（{title}）…"})
+    queue = CollectionQueue(ctx)
+    task = queue.claim("fetch_comments", aweme_id, tier)
+    if task is None:
+        raise ValueError("这条作品的评论任务正在运行或退避中，请稍后再试")
+    collector = CommentsCollector(ctx)
+    collector.on_progress = emit
+    try:
+        outcome = await collector.run({**task, "_api_cadence": True, "_resume": True,
+                                       "_hint": str(work.get("comment_count") or "")})
+    except asyncio.CancelledError:
+        queue.release(task)
+        raise
+    error = str(outcome.error or "")
+    if outcome.ok:
+        ctx.tasks.complete(task["id"])
+    elif outcome.blocked:
+        queue.release(task)
+        raise ValueError(f"采集受阻：{error}")
+    else:
+        if error.startswith("达到页数上限"):
+            queue.release(task)
+        else:
+            ctx.tasks.fail(task["id"], error, retry=True)
+        raise ValueError(f"评论采集未完成：{error[:120]}")
+    total = ctx.comments.count_for_work(aweme_id)
+    state = outcome.persisted.get("collection_state")
+    note = {"sampled": "（按抽样预算采集）", "full": "（已触底）"}.get(state, "")
+    return {"message": f"评论区采集完成：本作品已采 {total} 条评论{note}",
+            "report": {"aweme_id": aweme_id, "items": total, "state": state}}
+
+
 async def execute(paths, kind, emit, options=None):
-    if kind not in ("login", "collect", "profile", "review", "plan", "enterprise", "chat", "benchmark"):
+    if kind not in ("login", "collect", "profile", "review", "plan", "enterprise", "chat", "benchmark", "comments"):
         raise ValueError("未知操作")
     ctx = AppContext.create(load_config(paths))
     try:
@@ -288,6 +340,8 @@ async def execute(paths, kind, emit, options=None):
             return await collect(ctx, emit, options or {})
         if kind == "benchmark":
             return await check_benchmarks(ctx, emit, options or {})
+        if kind == "comments":
+            return await collect_comments(ctx, emit, options or {})
         return await analyze(ctx, kind, emit, options or {})
     finally:
         try:

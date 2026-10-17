@@ -3,7 +3,10 @@ import asyncio
 import json
 from urllib.parse import parse_qs, urlparse
 
+import pytest
+
 from scout.collect.comments import CommentsCollector
+from scout.desktop import actions
 from scout.parse.registry import parse_payload
 
 
@@ -101,3 +104,40 @@ def test_comments_collector_pages_budgets_and_dedupes(ctx, monkeypatch):
     assert rows and all(row["aweme_id"] == "777" for row in rows)
     again = asyncio.run(CommentsCollector(ctx).run({"target": "777", "tier": "a", "_resume": True}))
     assert again.ok and ctx.comments.count_for_work("777") == 100   # 幂等：不重复入库
+
+
+def test_comments_action_requires_login(ctx, monkeypatch):
+    ctx.works.upsert({"aweme_id": "777", "comment_count": 30})
+    monkeypatch.setattr(actions, "login_status", lambda paths: {"saved": False, "tier": "a", "message": ""})
+    with pytest.raises(ValueError, match="登录抖音"):
+        asyncio.run(actions.collect_comments(ctx, lambda event: None, {"aweme_id": "777"}))
+
+
+def test_comments_action_runs_and_reports(ctx, monkeypatch):
+    ctx.works.upsert({"aweme_id": "777", "comment_count": 30, "description": "测试作品"})
+    monkeypatch.setattr(actions, "login_status", lambda paths: {"saved": True, "tier": "a", "message": ""})
+
+    class FakeCollector:
+        def __init__(self, context):
+            self.on_progress = None
+
+        async def run(self, task):
+            ctx.comments.upsert_many([{"comment_id": "x1", "aweme_id": "777", "text": "好"}])
+
+            class Outcome:
+                ok = True
+                blocked = False
+                error = ""
+                requests = 1
+                persisted = {"collection_state": "full"}
+
+            return Outcome()
+
+    import scout.collect.comments as comments_module
+    monkeypatch.setattr(comments_module, "CommentsCollector", FakeCollector)
+    events = []
+    result = asyncio.run(actions.collect_comments(ctx, events.append, {"aweme_id": "777"}))
+    assert "已采 1 条评论" in result["message"] and result["report"]["state"] == "full"
+    task_row = ctx.db.query_one(
+        "SELECT state FROM tasks WHERE kind='fetch_comments' AND target='777'")
+    assert task_row["state"] == "done"

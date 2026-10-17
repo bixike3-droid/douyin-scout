@@ -63,6 +63,12 @@ class DesktopService:
         with Database.open(self.paths.db_path) as db:
             Benchmarks(db).remove(sec_uid)
 
+    def comments(self, aweme_id, limit=50):
+        from ..store.repo import Comments
+        with Database.open(self.paths.db_path, read_only=True) as db:
+            items = Comments(db).list_for_work(str(aweme_id), limit=limit)
+        return {"aweme_id": str(aweme_id), "items": items}
+
     def enterprise_workspace(self):
         with Database.open(self.paths.db_path, read_only=True) as db:
             return EnterpriseStore(db).workspace()
