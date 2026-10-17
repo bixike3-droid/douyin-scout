@@ -12,7 +12,7 @@ from .appearance import THEMES, color, style_sheet, theme_name
 STYLE = style_sheet("light")
 
 
-def apply_theme(app, mode="light"):
+def apply_theme(app, mode="light", backdrop=False):
     from PySide6.QtGui import QPalette
     from PySide6.QtWidgets import QWidget
     mode = mode if mode in THEMES else "light"
@@ -37,7 +37,7 @@ def apply_theme(app, mode="light"):
     for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
         palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(color("disabled", mode)))
     app.setPalette(palette)
-    app.setStyleSheet(style_sheet(mode))
+    app.setStyleSheet(style_sheet(mode, backdrop))
     for widget in app.allWidgets():
         glyph = widget.property("themeGlyph")
         if glyph:

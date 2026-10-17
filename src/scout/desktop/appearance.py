@@ -40,16 +40,27 @@ def color(name, mode=None):
     return THEMES[mode if mode in THEMES else theme_name()][name]
 
 
-def style_sheet(mode="light"):
-    return Template(_STYLE).substitute(THEMES[mode if mode in THEMES else "light"])
+def _rgba(hex_color, alpha):
+    value = hex_color.lstrip("#")
+    r, g, b = (int(value[index:index + 2], 16) for index in (0, 2, 4))
+    return f"rgba({r}, {g}, {b}, {round(alpha * 255)})"
+
+
+def style_sheet(mode="light", backdrop=False):
+    """backdrop=True 时把窗口底色交给 DWM 材质（Mica）：根背景透明、侧栏/工具栏半透明。"""
+    values = dict(THEMES[mode if mode in THEMES else "light"])
+    values["window_surface"] = "transparent" if backdrop else values["window"]
+    values["sidebar_surface"] = _rgba(values["sidebar"], 0.62) if backdrop else values["sidebar"]
+    values["toolbar_surface"] = _rgba(values["toolbar"], 0.55) if backdrop else values["toolbar"]
+    return Template(_STYLE).substitute(values)
 
 
 _STYLE = """
 QWidget { color: $text; background: transparent; font-size: 13px; }
-QMainWindow, QWidget#workspace, QWidget#overviewBody { background: $window; }
-QWidget#titleBar { background: $toolbar; border-bottom: 1px solid $border; }
+QMainWindow, QWidget#workspace, QWidget#overviewBody { background: $window_surface; }
+QWidget#titleBar { background: $toolbar_surface; border-bottom: 1px solid $border; }
 QPushButton#appBrand { background: transparent; border: none; color: $text; font-size: 15px; font-weight: 600; padding: 3px 8px; }
-QWidget#sidebar { background: $sidebar; border-right: 1px solid $border; }
+QWidget#sidebar { background: $sidebar_surface; border-right: 1px solid $border; }
 QLabel { background: transparent; }
 QLabel#heading { font-size: 26px; font-weight: 600; color: $text; }
 QLabel#taskHeading { font-size: 22px; font-weight: 600; color: $text; }
@@ -97,6 +108,8 @@ QPushButton#appearanceToggle { background: $subtle; border: 1px solid $border; b
 QPushButton#windowControl, QPushButton#closeControl { background: transparent; border: none; border-radius: 6px; padding: 0; color: $muted; font-size: 15px; }
 QPushButton#windowControl:hover { background: $hover; color: $text; }
 QPushButton#windowControl:pressed { background: $pressed; color: $text; }
+QPushButton#windowControl[nativeHover="true"] { background: $hover; color: $text; }
+QPushButton#windowControl[nativePressed="true"] { background: $pressed; color: $text; }
 QPushButton#closeControl:hover { background: #FF3B30; color: #FFFFFF; }
 QPushButton#closeControl:pressed { background: #E0342B; color: #FFFFFF; }
 QLabel#statusChip { background: $subtle; color: $muted; border-radius: 999px; padding: 4px 11px; font-size: 11px; }
@@ -178,7 +191,7 @@ QScrollBar::handle:horizontal:hover { background: $muted; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal, QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { width: 0; background: transparent; }
 QSplitter::handle { background: $border; }
 QSplitter::handle:hover { background: $scroll; }
-QStatusBar { background: $window; color: $muted; border-top: none; font-size: 11px; }
+QStatusBar { background: $window_surface; color: $muted; border-top: none; font-size: 11px; }
 QStatusBar::item { border: none; }
 QProgressBar { background: $subtle; border: none; border-radius: 3px; height: 4px; }
 QProgressBar::chunk { background: $accent; border-radius: 3px; }

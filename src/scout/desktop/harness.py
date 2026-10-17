@@ -1391,9 +1391,10 @@ class TitleBar(QWidget):
         row = QHBoxLayout(controls)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(4)
-        for title, name, identifier, action in (("—", "最小化", "windowControl", self.owner.showMinimized),
-                                               ("□", "最大化或还原", "windowControl", self.toggle_maximized),
-                                               ("×", "关闭", "closeControl", self.owner.close)):
+        for title, name, identifier, action, attribute in (
+                ("—", "最小化", "windowControl", self.owner.showMinimized, "min_button"),
+                ("□", "最大化或还原", "windowControl", self.toggle_maximized, "max_button"),
+                ("×", "关闭", "closeControl", self.owner.close, "close_button")):
             button = QPushButton(title)
             button.setObjectName(identifier)
             button.setFixedSize(44, 46)
@@ -1401,6 +1402,7 @@ class TitleBar(QWidget):
             button.setAccessibleName(name)
             button.clicked.connect(action)
             row.addWidget(button)
+            setattr(self, attribute, button)
         self.row.addWidget(controls)
 
     def toggle_maximized(self):

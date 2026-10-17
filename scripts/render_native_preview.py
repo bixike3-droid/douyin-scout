@@ -25,6 +25,7 @@ def main():
     from PySide6.QtCore import QAbstractAnimation
     from scout.desktop.service import DesktopService
     from scout.desktop.window import MainWindow, PAGES
+    from scout.desktop.winapi import dwm_flush
     from scout.paths import Paths
 
     app = QApplication([])
@@ -80,6 +81,7 @@ def main():
             if key in window.records and window.records[key].model.rowCount():
                 window.records[key].table.selectRow(0)
             app.processEvents()
+            dwm_flush()
             target = args.output / f"desktop-{key}.png"
             if not window.grab().save(str(target)):
                 raise RuntimeError(f"Cannot save preview: {target}")
@@ -87,6 +89,7 @@ def main():
                 for tab, name in ((1, "decisions"), (2, "metrics")):
                     getattr(window.enterprise, "right_tabs", window.enterprise.tabs).setCurrentIndex(tab)
                     settle()
+                    dwm_flush()
                     target = args.output / f"desktop-enterprise-{name}.png"
                     if not window.grab().save(str(target)):
                         raise RuntimeError(f"Cannot save preview: {target}")

@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import faulthandler
+import os
 import shutil
 from pathlib import Path
 
@@ -22,6 +24,11 @@ from scout.config import (
     TierConfig,
 )
 from scout.paths import Paths
+
+if os.environ.get("SCOUT_FAULTHANDLER"):
+    # 诊断用：SCOUT_FAULTHANDLER=1 时每 60 秒转储所有线程堆栈（直写 fd，绕过缓冲）。
+    faulthandler.enable()
+    faulthandler.dump_traceback_later(60, repeat=True)
 
 REPO_DEFAULT_YAML = Path(__file__).resolve().parents[1] / "config" / "default.yaml"
 

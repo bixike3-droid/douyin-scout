@@ -1,5 +1,5 @@
 """Small native transitions; never manufacture operation progress."""
-from PySide6.QtCore import Qt, Property, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import Qt, Property, QObject, QEvent, QPropertyAnimation, QEasingCurve
 from PySide6.QtGui import QPainter, QColor
 from PySide6.QtWidgets import QWidget, QFrame, QPushButton, QVBoxLayout, QHBoxLayout, QGraphicsOpacityEffect, QSizePolicy
 from .components import text
@@ -127,3 +127,37 @@ def fade_in(widget, enabled, start=0.35, duration=170):
     widget._fade = animation
     animation.finished.connect(lambda: widget.setGraphicsEffect(None) if widget.graphicsEffect() is effect else None)
     animation.start()
+
+
+def fade_popup(widget, duration=90):
+    """菜单 / 工具提示出现时快速淡入（QMenu、QTipLabel 共用）。"""
+    animation = QPropertyAnimation(widget, b"windowOpacity", widget)
+    animation.setStartValue(0.25)
+    animation.setEndValue(1.0)
+    animation.setDuration(duration)
+    animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+    widget._popup_fade = animation
+    animation.start()
+
+
+class PopupFader(QObject):
+    """全局事件过滤器：给 QMenu / QToolTip 的显示事件加淡入（尊重动效开关）。
+
+    注意：暂未在窗口里启用 —— 以宿主窗口为 parent、回调又持有窗口引用时
+    会形成引用环，旧窗口无法释放，后续 `setStyleSheet` 会越来越慢（实测
+    测试套件里表现为愈演愈烈的“卡死”）。重新启用前需：回调改弱引用，
+    并在窗口销毁时显式卸下事件过滤器。
+    """
+
+    def __init__(self, enabled, parent=None):
+        super().__init__(parent)
+        self._enabled = enabled
+
+    def eventFilter(self, obj, event):
+        try:
+            if (event.type() == QEvent.Type.Show and self._enabled()
+                    and obj.metaObject().className() in ("QMenu", "QTipLabel")):
+                fade_popup(obj)
+        except Exception:
+            pass
+        return False

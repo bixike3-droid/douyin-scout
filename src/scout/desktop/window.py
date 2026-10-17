@@ -26,6 +26,7 @@ from .benchmark import BenchmarkPage
 from .harness import HarnessPage, TitleBar
 from .enterprise import report_time
 from .motion import fade_in
+from .taskbar import TaskbarProgress
 
 LABELS = {
     "pending": "待处理", "running": "执行中", "done": "已完成", "failed": "失败",
@@ -313,7 +314,16 @@ class MainWindow(QMainWindow):
         appearance = str(self.ui_preferences.value("appearance", "light"))
         self.appearance_pref = appearance if appearance in ("light", "dark", "auto") else "light"
         self.appearance_mode = self._system_appearance() if self.appearance_pref == "auto" else self.appearance_pref
-        apply_theme(QApplication.instance(), self.appearance_mode)
+        # Win11 22H2+：Mica 背景板需要窗口本体可透明；旧系统 / 离屏环境保持纯色。
+        self._backdrop_enabled = False
+        try:
+            from .winapi import available, backdrop_supported
+            self._backdrop_enabled = available() and backdrop_supported()
+        except Exception:
+            self._backdrop_enabled = False
+        if self._backdrop_enabled:
+            self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        apply_theme(QApplication.instance(), self.appearance_mode, self._backdrop_enabled)
         try:
             QApplication.instance().styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
         except Exception:
@@ -343,12 +353,21 @@ class MainWindow(QMainWindow):
         self.conversation_to_load = None
         self.start_enterprise_after_save = None
         self.motion_enabled = self.ui_preferences.value("motionEnabled", True, type=bool)
+        # 首次使用（未显式设置过）时，动效默认跟随系统「窗口动画」开关。
+        if self.ui_preferences.value("motionEnabled") is None:
+            try:
+                from .winapi import system_animations_enabled
+                self.motion_enabled = system_animations_enabled()
+            except Exception:
+                self.motion_enabled = True
         self.conversation_to_load = self.ui_preferences.value("lastConversation", 0, type=int) or None
         # 边缘缩放过滤器只在真实的 Windows 原生窗口上启用；离屏/测试平台没有原生窗口，
         # 系统缩放/光标调用会连带影响 Qt 状态（测试中出现过 QLabel 构造级联失败）。
         self._resize_filter_active = (sys.platform == "win32"
                                       and QApplication.instance() is not None
                                       and QApplication.instance().platformName() == "windows")
+        self._ncm_tracked = False
+        self.taskbar = TaskbarProgress(self)
         self._build()
         if self._resize_filter_active:
             QApplication.instance().installEventFilter(self)
@@ -888,6 +907,7 @@ class MainWindow(QMainWindow):
 
     def _operation_busy(self, busy):
         self.cancel_button.setEnabled(busy)
+        self.taskbar.set_state("busy" if busy else "idle")
         if busy and self.operations.thread.kind in ("enterprise", "chat"):
             self.enterprise.set_processing(True, "正在准备本次传播任务…")
         elif not busy and self.enterprise.processing:
@@ -1097,9 +1117,11 @@ class MainWindow(QMainWindow):
         self.appearance_mode = resolved
         self.ui_preferences.setValue("appearance", mode)
         if QApplication.instance().property("scoutTheme") != resolved:
-            apply_theme(QApplication.instance(), resolved)
+            apply_theme(QApplication.instance(), resolved, self._backdrop_enabled)
             if self.isVisible():
                 fade_in(self, self.motion_enabled, start=0.7, duration=150)
+            if self._native_frame_applied:
+                self._sync_dwm_theme()
         labels = {"light": "浅色", "dark": "深色", "auto": "自动"}
         self.appearance_button.setText(labels[mode])
         self.appearance_button.setToolTip("切换明暗外观" if mode != "auto" else "跟随系统外观")
@@ -1254,6 +1276,7 @@ class MainWindow(QMainWindow):
         if not self._native_frame_applied:
             self._native_frame_applied = True
             self._apply_native_frame()
+            self._sync_dwm_theme()
 
     def _apply_native_frame(self):
         """Windows：补回 WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX。
@@ -1288,6 +1311,10 @@ class MainWindow(QMainWindow):
             preference = ctypes.c_int(2)
             ctypes.windll.dwmapi.DwmSetWindowAttribute(
                 hwnd, 33, ctypes.byref(preference), ctypes.sizeof(preference))
+            # Win11 22H2+：Mica 背景板铺满整窗（失败自动保持纯色）。
+            if getattr(self, "_backdrop_enabled", False):
+                from .winapi import apply_backdrop
+                apply_backdrop(hwnd)
         except Exception:
             pass
 
@@ -1299,12 +1326,26 @@ class MainWindow(QMainWindow):
                 if msg.message == 0x0083 and msg.wParam:  # WM_NCCALCSIZE（wParam=TRUE）
                     # 客户区 = 整个窗口矩形；补回的框架样式不缩小界面，也不产生可见标题栏。
                     return True, 0
-                if msg.message == 0x0084 and not (self.isMaximized() or self.isFullScreen()):
-                    # WM_NCHITTEST：客户区铺满整窗口后，边缘缩放命中要自己交回系统。
-                    code = self._resize_hit(ctypes.c_short(msg.lParam & 0xFFFF).value,
-                                            ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value)
-                    if code:
-                        return True, code
+                if msg.message == 0x0084:  # WM_NCHITTEST
+                    x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                    y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                    # 最大化键交给系统命中：Win11 悬停弹出 Snap 布局浮层，
+                    # 点击由 DefWindowProc 按系统命令处理（带原生动画）。
+                    if self._caption_button_code(x, y):
+                        return True, 9  # HTMAXBUTTON
+                    # 客户区铺满整窗口后，边缘缩放命中要自己交回系统。
+                    if not (self.isMaximized() or self.isFullScreen()):
+                        code = self._resize_hit(x, y)
+                        if code:
+                            return True, code
+                elif msg.message == 0x00A0:  # WM_NCMOUSEMOVE：维护最大化键悬停态
+                    self._track_max_button_hover(bool(msg.wParam == 9))
+                elif msg.message == 0x02A3:  # WM_NCMOUSELEAVE
+                    self._ncm_tracked = False
+                    self._track_max_button_hover(False, pressed=False)
+                elif msg.message in (0x00A1, 0x00A2) and msg.wParam == 9:
+                    # 按下/抬起只更新视觉，不腰断消息：让 DefWindowProc 走系统命令
+                    self._track_max_button_hover(True, pressed=msg.message == 0x00A1)
             except Exception:
                 pass
         return super().nativeEvent(eventType, message)
@@ -1331,6 +1372,66 @@ class MainWindow(QMainWindow):
         if edges & Qt.Edge.TopEdge:
             return 12  # HTTOP
         return 15  # HTBOTTOM
+
+    def _caption_button_code(self, screen_x: int, screen_y: int):
+        """屏幕物理坐标是否落在最大化键上（HTMAXBUTTON → Win11 Snap 布局悬停浮层）。"""
+        if self.isFullScreen():
+            return None
+        button = getattr(self.title_bar, "max_button", None)
+        if button is None or not button.isVisible():
+            return None
+        from PySide6.QtCore import QPoint
+        ratio = self.devicePixelRatioF() or 1.0
+        pos = QPoint(round(screen_x / ratio), round(screen_y / ratio))
+        return True if button.rect().contains(button.mapFromGlobal(pos)) else None
+
+    def _track_max_button_hover(self, hover: bool, pressed=None):
+        """最大化键转入非客户区后，悬停 / 按压态由属性选择器维护。"""
+        button = getattr(self.title_bar, "max_button", None)
+        if button is None:
+            return
+        if hover and not self._ncm_tracked:
+            self._ncm_tracked = True
+            try:
+                import ctypes
+                from ctypes import wintypes
+
+                class TRACKMOUSEEVENT(ctypes.Structure):
+                    _fields_ = [("cbSize", wintypes.DWORD), ("dwFlags", wintypes.DWORD),
+                                ("hwndTrack", wintypes.HWND), ("dwHoverTime", wintypes.DWORD)]
+
+                track = TRACKMOUSEEVENT(ctypes.sizeof(TRACKMOUSEEVENT), 0x0002 | 0x0010,
+                                        wintypes.HWND(int(self.winId())), 0)
+                ctypes.windll.user32.TrackMouseEvent(ctypes.byref(track))
+            except Exception:
+                pass
+        changes = {}
+        if button.property("nativeHover") != bool(hover):
+            changes["nativeHover"] = bool(hover)
+        if pressed is not None and button.property("nativePressed") != bool(pressed):
+            changes["nativePressed"] = bool(pressed)
+        if not changes:
+            return
+        for name, value in changes.items():
+            button.setProperty(name, value)
+        style = button.style()
+        style.unpolish(button)
+        style.polish(button)
+
+    def _sync_dwm_theme(self):
+        """Win11：窗口边框色与深色标记跟随应用主题（不支持的系统静默忽略）。"""
+        if sys.platform != "win32":
+            return
+        try:
+            from .appearance import color, theme_name
+            from .winapi import available, set_border_color, set_dark_titlebar
+            if not available():
+                return  # 离屏 / 测试平台没有真实 HWND，不能碰 DWM
+            hwnd = int(self.winId())
+            set_border_color(hwnd, color("border"))
+            set_dark_titlebar(hwnd, theme_name() == "dark")
+        except Exception:
+            pass
 
     def _hit_edges(self, global_pos):
         """全局逻辑坐标是否落在窗口边缘缩放带（6px）；命中返回 Qt.Edge 组合，否则 None。"""
