@@ -55,6 +55,19 @@ DESCRIPTIONS = {
     "tasks": "查看现有采集任务的状态、尝试次数和错误记录。",
 }
 
+# 启动时快照足够新就不再联网刷新，避免“先显示再更新”的重复感。
+HOT_SNAPSHOT_FRESH_MINUTES = 10
+
+
+def snapshot_age_minutes(value):
+    """快照距现在多少分钟；解析失败返回 None。"""
+    try:
+        moment = parse_iso(str(value))
+        now = datetime.now(tz=moment.tzinfo) if moment.tzinfo else datetime.now()
+        return (now - moment).total_seconds() / 60
+    except Exception:
+        return None
+
 
 def label(text):
     widget = QLabel(text)
@@ -547,6 +560,7 @@ class MainWindow(QMainWindow):
         self.enterprise.report_requested.connect(self._request_enterprise_report)
         self.enterprise.revision_requested.connect(self._save_enterprise_revision)
         self.enterprise.metrics_requested.connect(self._save_enterprise_metrics)
+        self.enterprise.metric_vision_requested.connect(self._recognize_metrics)
         self.enterprise.notice.connect(lambda message: self.statusBar().showMessage(message, 10000))
         self.stack.addWidget(self.enterprise)
         self.records = {}
@@ -679,9 +693,16 @@ class MainWindow(QMainWindow):
         self.key_input.setEchoMode(QLineEdit.EchoMode.Password)
         self.key_input.setPlaceholderText("输入新的 API Key；留空保留已保存的 Key")
         form.addWidget(self.key_input)
-        form.addWidget(text("模型名称", "sectionTitle"))
-        self.model_input = QLineEdit("deepseek-chat")
+        form.addWidget(text("模型", "sectionTitle"))
+        self.model_input = QComboBox()
+        self.model_input.addItems(["deepseek-flash", "deepseek-v4-pro"])
         form.addWidget(self.model_input)
+        form.addWidget(text("思考", "sectionTitle"))
+        self.effort_input = QComboBox()
+        self.effort_input.addItem("低", "low")
+        self.effort_input.addItem("中", "high")
+        self.effort_input.addItem("高", "max")
+        form.addWidget(self.effort_input)
         self.save_button = QPushButton("保存设置")
         self.save_button.setObjectName("primary")
         self.save_button.clicked.connect(self._save)
@@ -852,6 +873,9 @@ class MainWindow(QMainWindow):
         if event.get("type") == "answering":
             self.enterprise.mark_answering()
             return
+        if event.get("type") == "answer_delta":
+            self.enterprise.append_answer(event.get("delta") or "")
+            return
         if event.get("type") == "assigned":
             self.enterprise.set_processing(True, f"「{event.get('name') or '成员'}」接手，正在处理…")
             return
@@ -920,6 +944,18 @@ class MainWindow(QMainWindow):
         # 界面里的用户点了允许/拒绝 → 回送给 worker 线程里等待的确认请求
         self.operations.broker.resolve(request_id, approved)
 
+    def _start_hot_bootstrap(self):
+        """首屏：先用本地快照秒填，再后台无头刷新。"""
+        panel = self.enterprise.hot_panel
+        if os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"):
+            return  # 离屏模式（测试 / 预览截图）不自动拉热点
+        if self.closing or not self.initialized or panel.loaded_once:
+            return
+        if self.jobs.busy or self.operations.busy:
+            QTimer.singleShot(400, self._start_hot_bootstrap)
+            return
+        self.jobs.submit(lambda: ("hot_snapshot", None, self.service.hot_snapshot()))
+
     def _load_hot_board(self):
         panel = self.enterprise.hot_panel
         if os.environ.get("QT_QPA_PLATFORM", "").startswith("offscreen"):
@@ -927,8 +963,17 @@ class MainWindow(QMainWindow):
         if self.closing or not self.initialized or self.jobs.busy or self.operations.busy:
             return
         panel.loaded_once = True
-        panel.set_loading()
+        if getattr(panel, "_rows", None):
+            panel.set_refreshing()
+        else:
+            panel.set_loading()
         self.jobs.submit(lambda: ("hotboard", None, self.service.hot_board()))
+
+    def _recognize_metrics(self, path, aweme_id):
+        if self.jobs.busy or self.operations.busy:
+            self.statusBar().showMessage("请等待当前操作结束", 6000)
+            return
+        self.jobs.submit(lambda: ("metrics_vision", None, self.service.recognize_metrics(path, aweme_id)))
 
     def _refresh_hot_board(self):
         if self.jobs.busy or self.operations.busy:
@@ -981,8 +1026,10 @@ class MainWindow(QMainWindow):
             self.jobs.submit(lambda: ("overview", None, self.service.overview()))
 
     def _save(self):
-        key, model = self.key_input.text(), self.model_input.text()
-        self.jobs.submit(lambda: ("settings", None, self.service.save_settings(key, model)))
+        key = self.key_input.text()
+        model = (self.model_input.currentText() or "").strip()
+        effort = self.effort_input.currentData() or "high"
+        self.jobs.submit(lambda: ("settings", None, self.service.save_settings(key, model, effort)))
 
     def _save_enterprise(self, profile):
         self.jobs.submit(lambda: ("enterprise_saved", None, self.service.save_enterprise(profile)))
@@ -1191,9 +1238,19 @@ class MainWindow(QMainWindow):
         self.sample_depth.setItemData(0, limit)
         self.key_state.setText(f"密钥已配置 · {data['masked']}" if data["configured"] else "尚未配置密钥")
         self.browser_state.setText(f"采集浏览器：{data['browser']}")
-        self.model_input.setText(data["model"])
+        model = data["model"]
+        index = self.model_input.findText(model)
+        if index < 0:
+            # 旧配置/自定义模型名：补一个选项，保证看到的就是实际在用的
+            self.model_input.insertItem(0, model)
+            index = 0
+        self.model_input.setCurrentIndex(index)
+        effort = data.get("reasoning_effort") or "high"
+        effort_index = self.effort_input.findData(effort)
+        self.effort_input.setCurrentIndex(effort_index if effort_index >= 0 else 1)
         self.config_location.setText(f"配置位置：{data['config_file']}")
-        self.connection_state.setText(("模型已配置" if self.has_key else "模型未配置") + " · " + ("抖音登录态已保存" if self.login_saved else "抖音未登录"))
+        self.connection_state.setText(("模型已配置" if self.has_key else "模型未配置") + " · "
+                                     + ("抖音登录态已保存" if self.login_saved else "抖音未登录"))
 
     def _result(self, result):
         key, search, data = result
@@ -1233,7 +1290,7 @@ class MainWindow(QMainWindow):
             elif self.nav.currentRow() not in (6, 7):
                 self.pending = True
             if not self.enterprise.hot_panel.loaded_once:
-                QTimer.singleShot(300, self._load_hot_board)
+                QTimer.singleShot(120, self._start_hot_bootstrap)
         elif key in ("enterprise", "enterprise_saved", "enterprise_submit"):
             self.enterprise.apply_workspace(data, saved=key in ("enterprise_saved", "enterprise_submit"))
             if key == "enterprise_submit":
@@ -1255,7 +1312,19 @@ class MainWindow(QMainWindow):
             self.key_input.clear()
             self._settings(data)
         elif key == "hotboard":
-            self.enterprise.hot_panel.apply(data)
+            self.enterprise.hot_panel.apply(data, keep_on_error=True)
+            return
+        elif key == "hot_snapshot":
+            if data:
+                self.enterprise.hot_panel.apply(data, keep_on_error=True)
+                age = snapshot_age_minutes(data.get("fetched_at"))
+                if age is not None and age < HOT_SNAPSHOT_FRESH_MINUTES:
+                    # 刚拉过：直接用快照，不再联网刷新，避免列表二次变化
+                    return
+            QTimer.singleShot(200, self._load_hot_board)
+            return
+        elif key == "metrics_vision":
+            self.enterprise.apply_metric_vision(data)
             return
         elif key == "benchmark":
             self.benchmark.apply(data)
@@ -1293,6 +1362,7 @@ class MainWindow(QMainWindow):
         self.save_button.setEnabled(not active)
         self.key_input.setEnabled(not active)
         self.model_input.setEnabled(not active)
+        self.effort_input.setEnabled(not active)
         self.login_button.setEnabled(self.initialized and not active)
         self.login_action.setEnabled(self.initialized and not active)
         for button in self.operation_buttons:

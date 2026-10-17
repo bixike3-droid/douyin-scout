@@ -13,6 +13,19 @@ from scout.desktop.service import DesktopService
 from scout.store.desktop import DesktopStore
 
 
+def test_settings_store_model_and_effort(tmp_path, monkeypatch):
+    from scout.paths import Paths
+    from scout.desktop.service import DesktopService
+    root = tmp_path
+    (root / "config").mkdir(parents=True, exist_ok=True)
+    paths = Paths.build(root=root).ensure()
+    service = DesktopService(paths)
+    service.save_settings("sk-local-test-abcdefghijkl", "deepseek-v4-pro", "low")
+    data = service.settings()
+    assert data["model"] == "deepseek-v4-pro"
+    assert data["reasoning_effort"] == "low"
+
+
 def test_configuration_survives_restart_and_bundle_change(tmp_path, monkeypatch):
     import sys
     from pathlib import Path

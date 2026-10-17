@@ -152,6 +152,7 @@ async def _execute_workflow(ctx, client, request, conversation_id, *, workflow="
         store.state(run_id, "running")
         store.finish_user_message(user_id, "pending")
         publish()
+        effort = (getattr(getattr(ctx.config, "llm", None), "reasoning_effort", "high") or "high").lower()
         for step in store.get(run_id)["steps"]:
             if step["status"] in ("complete", "skipped"):
                 continue
@@ -174,7 +175,7 @@ async def _execute_workflow(ctx, client, request, conversation_id, *, workflow="
                                "findings": [], "limitations": snapshot["limits"]}
                     inputs, reply = {"snapshot_id": next(a["id"] for a in run["artifacts"] if a["kind"] == "data")}, None
                 else:
-                    content, inputs, reply = await _analyze(client, run, step, delta, stop)
+                    content, inputs, reply = await _analyze(client, run, step, delta, stop, effort)
             with ctx.db.transaction():
                 store.artifact(run_id, step["id"], step["name"], content, inputs, reply)
                 if step["name"] == "strategy":
@@ -256,7 +257,7 @@ async def _data(ctx, store, run, step, confirm, emit):
     return snapshot
 
 
-async def _analyze(client, run, step, delta, stop):
+async def _analyze(client, run, step, delta, stop, effort="high"):
     snapshot = next(a for a in run["artifacts"] if a["kind"] == "data")
     context = json.loads(encode(snapshot["content"]))
     context["evidence"][0]["data"]["request"] = run["request"]
@@ -281,9 +282,13 @@ async def _analyze(client, run, step, delta, stop):
     inputs["previous_plan"] = run["options"].get("previous_plan")
     last_error = None
     usage = []
+    # 思考强度只在“高”档给方案阶段启用；中/低档保持直出（当前默认行为）。
+    strength = (effort or "high").lower()
+    thinking = strength == "max"
     for attempt in range(2):
         reply = await client.chat(system, encode(inputs), json_mode=True, max_tokens=6000,
-                                  thinking=False, on_delta=delta, stop_event=stop)
+                                  thinking=thinking, effort="max" if thinking else None,
+                                  on_delta=delta, stop_event=stop)
         usage.append(reply)
         output = _parse_json(reply.text)
         if step["name"] == "strategy" and isinstance(output.get("plan"), dict):

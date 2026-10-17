@@ -20,6 +20,7 @@ class EnterprisePage(QWidget):
     report_requested = Signal(int)
     revision_requested = Signal(object)
     metrics_requested = Signal(object)
+    metric_vision_requested = Signal(str, str)
     notice = Signal(str)
 
     def __init__(self):
@@ -238,6 +239,14 @@ class EnterprisePage(QWidget):
         self.metric_notes = QLineEdit()
         self.metric_notes.setPlaceholderText("内容说明/脚本摘要、统计口径及本次内容调整说明")
         layout.addWidget(self.metric_notes)
+        vision_row = QHBoxLayout()
+        self.vision_button = QPushButton("识别后台截图")
+        self.vision_button.setToolTip("上传创作者中心截图，自动读出播放/点赞/评论/转发（需核对）")
+        self.vision_button.clicked.connect(self._pick_metric_image)
+        vision_row.addWidget(self.vision_button)
+        self.vision_state = text("也可以用截图识别自动填入，保存前请逐项核对。", "muted")
+        vision_row.addWidget(self.vision_state, 1)
+        layout.addLayout(vision_row)
         self.metrics_button = QPushButton("保存指标快照")
         self.metrics_button.setObjectName("primary")
         self.metrics_button.clicked.connect(self._save_metrics)
@@ -252,6 +261,41 @@ class EnterprisePage(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setWidget(body)
         return scroll
+
+    def _pick_metric_image(self):
+        if self.work_select.currentData() is None:
+            self.notice.emit("请先选择作品，再识别截图")
+            return
+        target, _ = QFileDialog.getOpenFileName(self, "选择后台数据截图", "",
+                                                "图片 (*.png *.jpg *.jpeg *.webp *.gif)")
+        if not target:
+            return
+        self.vision_button.setEnabled(False)
+        self.vision_state.setText("正在识别截图（约 10–30 秒，结果需人工核对）…")
+        self.metric_vision_requested.emit(str(target), str(self.work_select.currentData()))
+
+    def apply_metric_vision(self, result):
+        """识别结果回填表单（不自动保存）：只填看清的字段，其余保留原值。"""
+        self.vision_button.setEnabled(True)
+        if not isinstance(result, dict) or not result.get("ok"):
+            self.vision_state.setText((result or {}).get("error") or "识别失败")
+            return
+        data = result.get("data") or {}
+        for key, field in self.metric_fields.items():
+            value = data.get(key)
+            if value is not None:
+                field.setText(str(value))
+        if data.get("collected_at"):
+            self.metric_date.setText(data["collected_at"])
+        self.metric_source.setText(f"AI 识别截图（{result.get('filename') or '请核对'}）")
+        notes = [f"识别置信度：{data.get('confidence') or '未知'}"]
+        if data.get("missing"):
+            notes.append("未识别：" + "、".join(data["missing"]))
+        if data.get("notes"):
+            notes.append(data["notes"])
+        existing = self.metric_notes.text().strip()
+        self.metric_notes.setText("；".join(notes + ([existing] if existing else []))[:200])
+        self.vision_state.setText("识别完成，请逐项核对后再保存快照")
 
     def _save_metrics(self):
         data = {"aweme_id": self.work_select.currentData(), "source": self.metric_source.text(),

@@ -30,9 +30,20 @@ class BrowserContext:
     def __init__(self, payload):
         self.pages = [Page(payload)]
         self.closed = False
+        self.cleared = False
+        self.cleared_names = []
 
     async def cookies(self):
         return []
+
+    async def clear_cookies(self, *, name=None):
+        if name is None:
+            self.cleared = True
+        else:
+            self.cleared_names.append(name)
+
+    async def add_cookies(self, cookies):
+        self.cleared = True
 
     async def storage_state(self, path):
         with open(path, "w", encoding="utf-8") as handle:
@@ -72,15 +83,30 @@ def test_login_saves_identity_state_and_releases_browser(ctx, monkeypatch):
     assert not ProfileLock.status(ctx.config.tier("a").resolved_profile_dir(ctx.paths))["locked"]
 
 
-def test_login_rejects_other_account_without_overwriting_state(ctx, monkeypatch):
-    ctx.cursors.set("self_sec_uid", "original")
+def test_relogin_clears_previous_account_before_scanning(ctx, monkeypatch):
+    """重新登录：浏览器里残留的旧账号要先退出，否则用户永远只能登回同一个号。
+
+    只清登录凭据，不能把 UIFID 等设备指纹一起清掉（清了接口会被判风控）。
+    """
     target = ctx.paths.state_dir / "tier_a_storage.json"
-    target.write_text('{"original": true}', encoding="utf-8")
+    target.write_text(json.dumps({"cookies": [
+        {"name": "sessionid", "domain": ".douyin.com", "expires": -1}]}), encoding="utf-8")
     context = fake_playwright(monkeypatch, PAYLOAD)
-    with pytest.raises(ValueError, match="另一抖音账号"):
-        asyncio.run(login(ctx, lambda event: None))
-    assert ctx.cursors.get("self_sec_uid") == "original"
-    assert json.loads(target.read_text(encoding="utf-8")) == {"original": True}
+    result = asyncio.run(login(ctx, lambda event: None))
+    assert "sessionid" in context.cleared_names
+    assert not context.cleared
+    assert result["nickname"] == "测试账号"
+
+
+def test_login_can_switch_to_another_account(ctx, monkeypatch):
+    ctx.cursors.set("self_sec_uid", "original")
+    ctx.works.upsert({"aweme_id": "old-work", "author_sec_uid": "original", "is_mine": 1})
+    context = fake_playwright(monkeypatch, PAYLOAD)
+    result = asyncio.run(login(ctx, lambda event: None))
+    assert result["switched"] is True and "已切换账号" in result["message"]
+    assert ctx.cursors.get("self_sec_uid") == "owner"
+    # 旧账号的作品不再算「本人作品」，避免两个号的数据混在概览里
+    assert ctx.works.get("old-work")["is_mine"] == 0
     assert context.closed
 
 
@@ -119,6 +145,21 @@ def test_saved_state_status_handles_expired_foreign_and_malformed_files(paths):
                  {"cookies": [{"name": "sessionid", "domain": "other.example", "expires": -1}]}):
         target.write_text(json.dumps(data), encoding="utf-8")
         assert not login_status(paths)["saved"]
+
+
+def test_login_status_requires_sessionid(paths):
+    """只有其它 cookie 不能算登录态：sessionid 才是登录凭据。"""
+    target = paths.state_dir / "tier_a_storage.json"
+    target.write_text(json.dumps({"cookies": [
+        {"name": "ttwid", "domain": ".douyin.com", "expires": -1},
+        {"name": "sid_tt", "domain": ".douyin.com", "expires": -1}]}), encoding="utf-8")
+    status = login_status(paths)
+    assert status["saved"] is False
+    assert "sessionid" in status["message"]
+    assert "ttwid" in status["cookies"]
+    target.write_text(json.dumps({"cookies": [
+        {"name": "sessionid", "domain": ".douyin.com", "expires": -1}]}), encoding="utf-8")
+    assert login_status(paths)["saved"] is True
 
 
 def test_identity_validation_does_not_mix_account_data(ctx):

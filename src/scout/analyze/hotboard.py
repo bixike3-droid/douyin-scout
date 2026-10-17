@@ -56,15 +56,24 @@ async def evaluate_topics(profile_text: str, words: list[dict], client) -> dict[
     return marks
 
 
-async def load_hot_board(ctx, *, client=None, fetch: Callable | None = None, limit: int = 20) -> dict:
+async def load_hot_board(ctx, *, client=None, fetch: Callable | None = None, limit: int = 20,
+                       headless: bool = False) -> dict:
     """抓热点 + 评估，返回面板可直接展示的结构；一切失败都转成 error 字段。"""
-    from ..tools.hot import _douyin_hot, _extract_words  # 延迟导入，测试可注入 fetch
+    from ..tools.hot import _extract_words  # 延迟导入，测试可注入 fetch
+    from ..collect.hot import fetch_hot
 
+    snapshot_note = ""
     try:
-        payload = await (fetch or _douyin_hot)(ctx)
+        payload = await (fetch or (lambda context: fetch_hot(context, headless=headless)))(ctx)
         raw = _extract_words(payload)
-    except Exception as exc:  # noqa: BLE001 —— 面板展示失败态而不是弹窗
-        return {"error": f"热点获取失败：{type(exc).__name__}：{str(exc)[:120]}", "fetched_at": iso()}
+    except Exception as exc:  # noqa: BLE001 —— 实时失败回落本地快照
+        latest = _recent_snapshot(ctx)
+        if latest is None:
+            return {"error": f"热点获取失败：{type(exc).__name__}：{str(exc)[:120]}", "fetched_at": iso()}
+        raw = [{"word": item["word"], "hot_value": item.get("hot_value")}
+               for item in latest["items"]]
+        stamp = latest["fetched_at"][:16].replace("T", " ")
+        snapshot_note = f"实时获取失败（{str(exc)[:80]}），展示本地快照（{stamp}）"
     if not raw:
         return {"error": "热点榜返回为空（接口结构可能变化）", "fetched_at": iso()}
 
@@ -74,9 +83,9 @@ async def load_hot_board(ctx, *, client=None, fetch: Callable | None = None, lim
                       "heat": item.get("hot_value") or item.get("heat") or item.get("hot_score") or "",
                       "mark": "", "why": ""})
 
-    note = ""
+    notes = [snapshot_note] if snapshot_note else []
     if not getattr(getattr(ctx.config, "llm", None), "api_key", ""):
-        note = "未配置模型 Key，暂不做可用性评估"
+        notes.append("未配置模型 Key，暂不做可用性评估")
     else:
         try:
             if client is None:
@@ -91,9 +100,19 @@ async def load_hot_board(ctx, *, client=None, fetch: Callable | None = None, lim
                     item["mark"] = hit["mark"]
                     item["why"] = hit["why"]
             if not marks:
-                note = "评估结果为空（模型输出未通过校验）"
+                notes.append("评估结果为空（模型输出未通过校验）")
         except Exception as exc:  # noqa: BLE001 —— 评估失败不影响榜单展示
-            note = f"可用性评估暂不可用（{type(exc).__name__}）"
+            notes.append(f"可用性评估暂不可用（{type(exc).__name__}）")
 
-    return {"topics": words, "fetched_at": iso(), "note": note,
+    return {"topics": words, "fetched_at": iso(), "note": "；".join(notes),
             "usable": sum(1 for item in words if item.get("mark") == "可用")}
+
+
+def _recent_snapshot(ctx):
+    """本地最近一份热榜快照；读不到（旧库/无记录）返回 None。"""
+    try:
+        from ..store.hot import HotTopics
+        latest = HotTopics(ctx.db).latest(limit=50)
+    except Exception:  # noqa: BLE001
+        return None
+    return latest if latest and latest.get("items") else None

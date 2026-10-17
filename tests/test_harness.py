@@ -275,12 +275,120 @@ def test_confirmation_card_marks_timeout_without_click(qt_app):
         pane.deleteLater()
 
 
-def test_right_tabs_are_hot_plan_canvas(qt_app):
+def test_right_tabs_are_hot_and_plan(qt_app):
     from scout.desktop.harness import HarnessPage
     pane = HarnessPage()
     try:
-        assert [pane.right_tabs.tabText(i) for i in range(3)] == ["抖音热点", "内容方案", "可视化"]
-        assert "自动生成" in pane.canvas_panel.hint.text()
+        # 可视化不再占右栏：mermaid 图直接出现在对话里
+        assert [pane.right_tabs.tabText(i) for i in range(pane.right_tabs.count())] == ["抖音热点", "内容方案"]
+    finally:
+        pane.deleteLater()
+
+
+def test_diagram_renders_inside_conversation(qt_app, tmp_path, monkeypatch):
+    """带 mermaid 的回复：图卡出现在对话流，气泡正文不带代码块。"""
+    from PySide6.QtGui import QImage
+    from scout.desktop import harness
+    from scout.desktop.harness import DiagramView, SafeMessageBrowser
+    image_path = tmp_path / "d.png"
+    image = QImage(40, 20, QImage.Format.Format_ARGB32)
+    image.fill(0xFF007AFF)
+    assert image.save(str(image_path))
+    monkeypatch.setattr(harness, "render_png", lambda code: image_path)
+    pane = harness.HarnessPage()
+    try:
+        pane.apply_conversation({"id": 1, "title": "可视化", "created_at": "2026-10-17 10:00",
+                                 "messages": [{"role": "assistant", "status": "complete",
+                                               "content": "先看流程：\n\n```mermaid\nflowchart TD\n  A[一] --> B[二]\n```\n\n按这个顺序跑。"}]})
+        cards = pane.transcript.findChildren(DiagramView)
+        assert len(cards) == 1
+        bubbles = pane.transcript.findChildren(SafeMessageBrowser)
+        joined = "\n".join(bubble.toPlainText() for bubble in bubbles)
+        assert "flowchart" not in joined and "按这个顺序跑" in joined
+        pump(qt_app, lambda: cards[0].image.text() == "", timeout=5)
+        assert cards[0].image.pixmap() is not None
+        cards[0].image.double_clicked.emit()      # 双击图片 → 放大预览
+        preview = cards[0]._preview
+        assert preview is not None and preview.isVisible()
+        assert "可视化预览" == preview.windowTitle()
+        preview.close()
+    finally:
+        pane.deleteLater()
+
+
+def test_choice_card_click_continues_conversation(qt_app, monkeypatch):
+    """选择题：单个单选题点选项就直接继续对话，不用再点发送。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from scout.desktop import harness
+    pane = harness.HarnessPage()
+    try:
+        sent = []
+        monkeypatch.setattr(pane, "_generate", lambda: sent.append(pane.composer.toPlainText()))
+        pane.apply_conversation({"id": 1, "title": "选择题", "created_at": "2026-10-17 10:00",
+                                 "messages": [{"role": "assistant", "status": "complete",
+                                               "content": '两个方案各有取舍。\n\n```choices\n'
+                                                          '{"questions":[{"title":"下一步","multi":false,'
+                                                          '"options":["深入方案 A","深入方案 B"]}]}\n```'}]})
+        cards = pane.transcript.findChildren(harness.ChoiceCard)
+        assert len(cards) == 1
+        options = [w for w in cards[0].findChildren(harness.ChoiceOption)]
+        assert [b.text() for b in options] == ["深入方案 A", "深入方案 B"]
+        assert cards[0].confirm.isHidden()               # 单选题不需要确认按钮
+        QTest.mouseClick(options[1], Qt.MouseButton.LeftButton)
+        assert sent == ["下一步：深入方案 B"]
+        assert pane.composer.toPlainText() == "下一步：深入方案 B"
+        assert not options[0].isEnabled()                # 提交后锁住，不能重复发
+    finally:
+        pane.deleteLater()
+
+
+def test_choice_card_multi_select_waits_for_confirm(qt_app):
+    """多选 / 多题：全部选完才能点「就用这些继续」。"""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from scout.desktop import harness
+    pane = harness.HarnessPage()
+    try:
+        content = ("先定两个偏好。\n\n```choices\n"
+                   '{"questions":[{"title":"偏好","multi":true,"options":["节奏快","画面强"]},'
+                   '{"title":"时长","multi":false,"options":["15 秒","30 秒"]}]}\n```')
+        pane.apply_conversation({"id": 2, "title": "多选", "created_at": "2026-10-17 10:00",
+                                 "messages": [{"role": "assistant", "status": "complete", "content": content}]})
+        card = pane.transcript.findChildren(harness.ChoiceCard)[0]
+        answers = []
+        card.submitted.connect(answers.append)
+        options = [w for w in card.findChildren(harness.ChoiceOption)]
+        assert not card.confirm.isHidden() and not card.confirm.isEnabled()
+        QTest.mouseClick(options[0], Qt.MouseButton.LeftButton)   # 节奏快
+        assert not card.confirm.isEnabled()                      # 还有一题没选
+        QTest.mouseClick(options[1], Qt.MouseButton.LeftButton)   # 画面强
+        QTest.mouseClick(options[2], Qt.MouseButton.LeftButton)   # 15 秒
+        assert card.confirm.isEnabled()
+        card.confirm.click()
+        assert answers == ["偏好：节奏快、画面强\n时长：15 秒"]
+    finally:
+        pane.deleteLater()
+
+
+def test_streamed_answer_shows_text_then_yields_to_final_render(qt_app):
+    """撰写过程要边写边显：增量先落在临时气泡，正式消息到达后收掉。"""
+    from scout.desktop import harness
+    assert harness.stream_visible_markdown("正文```choices\n{\"a\":1}") == "正文"
+    assert harness.stream_visible_markdown("正文```mermaid\ngraph TD") == "正文"
+    assert harness.stream_visible_markdown("正文\n\n结论") == "正文\n\n结论"
+    pane = harness.HarnessPage()
+    try:
+        pane.begin_reasoning()
+        pane.append_answer("第一段")
+        pane.append_answer("，继续写")
+        assert pane.stream_bubble is not None
+        pane._flush_stream()
+        assert "第一段，继续写" in pane.stream_bubble.toPlainText()
+        pane.apply_conversation({"id": 9, "title": "流式", "created_at": "2026-10-17 10:00",
+                                 "messages": [{"role": "assistant", "status": "complete",
+                                               "content": "第一段，继续写。"}]})
+        assert pane.stream_bubble is None
     finally:
         pane.deleteLater()
 
@@ -314,6 +422,96 @@ def test_hot_panel_error_state(qt_app):
         assert not pane.hot_panel.refresh_button.isEnabled()
     finally:
         pane.deleteLater()
+
+
+def test_hot_panel_keeps_snapshot_when_refresh_fails(qt_app):
+    """首屏展示本地快照；实时刷新失败时保留快照，不把列表清空。"""
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        pane.hot_panel.apply({"topics": [{"word": "乡村振兴", "heat": 123, "mark": "", "why": ""}],
+                              "usable": 0, "note": "本地快照，正在后台刷新",
+                              "fetched_at": "2026-10-17T09:00:00Z"})
+        pane.hot_panel.set_refreshing()
+        pane.hot_panel.apply({"error": "热点获取失败：RuntimeError：验证码"}, keep_on_error=True)
+        assert len(pane.hot_panel._rows) == 1
+        assert "快照" in pane.hot_panel.status.text()
+    finally:
+        pane.deleteLater()
+
+
+def test_markdown_table_gets_borders(qt_app):
+    """AI 回复里的 Markdown 表格补上边框与表头底色。"""
+    from scout.desktop import harness
+    styled = harness.table_markup(
+        "<table><tr><th>指标</th><th>数值</th></tr>"
+        "<tr><td>播放</td><td>1200</td></tr></table>")
+    assert "border-collapse:collapse" in styled
+    assert styled.count("border:1px solid") >= 3
+    assert "background-color" in styled
+    bubble = harness.SafeMessageBrowser()
+    try:
+        bubble.setMarkdown("| 指标 | 数值 |\n| --- | --- |\n| 播放 | 1200 |")
+        harness.style_tables(bubble)
+        assert "table" in bubble.toHtml()
+        assert "播放" in bubble.toPlainText() and "1200" in bubble.toPlainText()
+    finally:
+        bubble.deleteLater()
+
+
+def test_settings_expose_model_and_effort(qt_app, ctx):
+    """设置页能选模型与思考档位（只给名称与低/中/高）。"""
+    from scout.desktop.window import MainWindow
+    service = DesktopService(ctx.paths)
+    service.save_settings("sk-test-never-sent", "deepseek-flash", "max")
+    window = MainWindow(service)
+    window.show()
+    try:
+        pump(qt_app, lambda: window.initialized and settled(window))
+        assert window.model_input.currentText() == "deepseek-flash"
+        assert window.effort_input.currentData() == "max"
+        assert window.effort_input.currentText() == "高"
+        assert [window.model_input.itemText(i) for i in range(window.model_input.count())][:2] == [
+            "deepseek-flash", "deepseek-v4-pro"]
+    finally:
+        window.close()
+
+
+def test_metric_vision_fills_form_without_saving(qt_app):
+    """截图识别结果只回填表单，来源标注需要核对，不自动保存。"""
+    from scout.desktop.harness import HarnessPage
+    pane = HarnessPage()
+    try:
+        pane.apply_metric_vision({"ok": True, "filename": "后台.png", "data": {
+            "play_count": 1200, "digg_count": 80, "comment_count": None, "share_count": 5,
+            "collected_at": "2026-10-16", "confidence": "high",
+            "missing": ["评论量"], "notes": "截图右上角"}})
+        assert pane.metric_fields["play_count"].text() == "1200"
+        assert pane.metric_fields["digg_count"].text() == "80"
+        assert pane.metric_fields["comment_count"].text() == ""      # 没识别到就不覆盖
+        assert pane.metric_date.text() == "2026-10-16"
+        assert "AI 识别截图" in pane.metric_source.text()
+        assert "未识别：评论量" in pane.metric_notes.text()
+        assert "核对" in pane.vision_state.text()
+        pane.apply_metric_vision({"ok": False, "error": "截图里没有识别到任何指标"})
+        assert "没有识别到" in pane.vision_state.text()
+        assert pane.vision_button.isEnabled()
+    finally:
+        pane.deleteLater()
+
+
+def test_splash_shows_real_stage_and_closes(qt_app):
+    from scout.desktop.splash import Splash
+    splash = Splash(motion=False)
+    try:
+        splash.show_centered()
+        splash.set_stage("正在同步抖音热榜")
+        assert splash.stage.text() == "正在同步抖音热榜"
+        assert splash.isVisible()
+        splash.finish()
+        assert not splash.isVisible()
+    finally:
+        splash.close()
 
 
 def test_reasoning_panel_is_collapsed_until_clicked(qt_app):
@@ -384,6 +582,31 @@ def test_continuation_appends_without_rebuilding_transcript(qt_app, ctx, monkeyp
         window.close()
 
 
+def test_bubble_height_fits_actual_width_without_clipping(qt_app):
+    """气泡按控件真实宽度定高：既不裁剪末行（会被可视化卡片盖住），也不留大块空白。"""
+    from scout.desktop import harness
+    pane = harness.HarnessPage()
+    pane.resize(760, 700)
+    pane.show()
+    try:
+        text = "这是一段会换行的长文本，用来验证气泡不会被裁掉。" * 60
+        pane.apply_conversation({"id": 7, "title": "高度", "created_at": "2026-10-17 10:00",
+                                 "messages": [{"role": "assistant", "status": "complete",
+                                               "content": text}]})
+        for _ in range(10):
+            qt_app.processEvents()
+        bubbles = [b for b in pane.transcript.findChildren(harness.SafeMessageBrowser) if b.isVisible()]
+        assert bubbles
+        for bubble in bubbles:
+            document = bubble.document()
+            document.setTextWidth(bubble.viewport().width())
+            need = int(document.size().height())
+            assert bubble.height() >= need                    # 末行不会被下一块盖住
+            assert bubble.height() - need <= 40               # 也不会留出一大块空白
+    finally:
+        pane.deleteLater()
+
+
 def test_chat_bubbles_refollow_viewport_width(qt_app, ctx):
     """窗口（或分栏）宽度变化后，聊天气泡重新换行并按内容重新定高。"""
     import time as _time
@@ -437,11 +660,11 @@ def test_generate_button_turns_into_stop_and_cancels(qt_app, ctx, monkeypatch):
         pane = window.enterprise
         pane.composer.setPlainText("先停一下")
         pane.generate_button.click()
-        assert pane.generate_button.text() == "停止"
+        assert pane.generate_button.toolTip() == "停止"
         assert pane.generate_button.isEnabled()
         pane.generate_button.click()  # 停止生成
         pump(qt_app, lambda: settled(window), timeout=10)
-        assert pane.generate_button.text() == "发送"
+        assert pane.generate_button.toolTip() == "发送"
         assert pane.reasoning_panel is not None
         assert "停止" in pane.reasoning_panel.toggle.text()
     finally:
@@ -547,10 +770,10 @@ def test_composer_grows_and_shrinks(qt_app, ctx):
         assert composer.maximumHeight() == 52
         composer.setPlainText("一\n二\n三\n四\n五")
         qt_app.processEvents()
-        assert 52 < composer.maximumHeight() <= 150
+        assert 52 < composer.maximumHeight() <= 64      # 约两行半封顶
         composer.setPlainText("\n".join(str(index) for index in range(40)))
         qt_app.processEvents()
-        assert composer.maximumHeight() == 150
+        assert composer.maximumHeight() == 64
         composer.clear()
         qt_app.processEvents()
         assert composer.maximumHeight() == 52

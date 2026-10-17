@@ -43,3 +43,17 @@ class Conversations:
             result.append({"role": message["role"], "content": content})
             length += len(content)
         return list(reversed(result))
+
+    def memory(self, conversation_id):
+        """较早对话的压缩摘要；没有则 None。"""
+        row = self.db.query_one(
+            "SELECT summary,turns,updated_at FROM conversation_memory WHERE conversation_id=?",
+            (conversation_id,))
+        return dict(row) if row else None
+
+    def save_memory(self, conversation_id, summary, turns):
+        self.db.execute(
+            "INSERT INTO conversation_memory(conversation_id,summary,turns,updated_at) VALUES(?,?,?,?) "
+            "ON CONFLICT(conversation_id) DO UPDATE SET summary=excluded.summary,"
+            "turns=excluded.turns,updated_at=excluded.updated_at",
+            (conversation_id, summary[:4000], int(turns), iso()))

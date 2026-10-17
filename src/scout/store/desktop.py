@@ -25,13 +25,16 @@ class DesktopStore:
         self.db = db
 
     def overview(self) -> dict[str, Any]:
+        # 注意：query_one 返回 sqlite3.Row（只有下标与 keys()，没有 .get），
+        # 调用方（工具 / 界面）习惯按 dict 取字段，这里统一转成 dict。
+        me = self.db.query_one("SELECT u.nickname FROM users u JOIN cursor_state c "
+                               "ON c.name='self_sec_uid' AND c.cursor=u.sec_uid")
         return {
             "works": self.db.scalar("SELECT COUNT(*) FROM works WHERE is_mine=1", default=0),
             "users": self.db.scalar("SELECT COUNT(DISTINCT sec_uid) FROM like_edges", default=0),
             "analyses": self.db.scalar("SELECT COUNT(*) FROM llm_results", default=0),
             "pending": self.db.scalar("SELECT COUNT(*) FROM tasks WHERE state='pending'", default=0),
-            "self": self.db.query_one("SELECT u.nickname FROM users u JOIN cursor_state c "
-                                      "ON c.name='self_sec_uid' AND c.cursor=u.sec_uid"),
+            "self": dict(me) if me else {},
             "events": self.db.rows_as_dicts("SELECT ts, level, message FROM event_logs ORDER BY id DESC LIMIT 12"),
             "task_counts": {r["state"]: r["count"] for r in self.db.query("SELECT state, COUNT(*) AS count FROM tasks GROUP BY state")},
             "recent_works": self.db.rows_as_dicts("SELECT description, digg_count, create_time FROM works WHERE is_mine=1 ORDER BY create_time DESC LIMIT 5"),

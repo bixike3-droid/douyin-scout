@@ -97,14 +97,59 @@ class DesktopService:
             EnterpriseStore(db).save_metrics(data)
             return EnterpriseStore(db).workspace()
 
+    def recognize_metrics(self, image_path, aweme_id=""):
+        """后台截图 → 指标（Vision）。结果只用于回填表单，不直接入库。"""
+        from ..analyze.metrics_vision import recognize
+        cfg = load_config(self.paths)
+        if not cfg.llm.api_key:
+            return {"ok": False, "error": "尚未配置 DeepSeek Key"}
+        if "flash" not in (cfg.llm.model or "").lower():
+            return {"ok": False, "error": f"当前模型 {cfg.llm.model} 不支持图片识别，请在设置里改用 deepseek-flash"}
+
+        async def run():
+            ctx = AppContext.create(cfg)
+            try:
+                from ..llm import DeepSeekClient
+                client = DeepSeekClient(ctx.config.llm)
+                result = await recognize(client, image_path)
+                if result.get("ok"):
+                    result["filename"] = Path(image_path).name
+                    result["aweme_id"] = str(aweme_id or "")
+                return result
+            finally:
+                ctx.close()
+
+        try:
+            return asyncio.run(run())
+        except Exception as exc:  # noqa: BLE001 —— 界面展示失败态
+            return {"ok": False, "error": f"识别失败：{type(exc).__name__}：{str(exc)[:140]}"}
+
     def settings(self):
         cfg = load_config(self.paths)
         key = cfg.llm.api_key
         return {"configured": bool(key), "model": cfg.llm.model,
+                "reasoning_effort": getattr(cfg.llm, "reasoning_effort", "high"),
+                "base_url": cfg.llm.base_url,
                 "masked": key[:6] + "…" + key[-4:] if len(key) > 12 else ("已设置" if key else "未设置"),
                 "config_file": str(self.paths.config_dir / "llm.local.yaml"),
                 "quick_works_limit": cfg.targets.quick_works_limit,
                 "browser": cfg.browser.channel or "Chromium"}
+
+    def hot_snapshot(self):
+        """启动首屏用：最近一次热榜快照（不发起任何请求）。"""
+        from ..store.hot import HotTopics
+        try:
+            with Database.open(self.paths.db_path, read_only=True) as db:
+                latest = HotTopics(db).latest(limit=20)
+        except Exception:  # noqa: BLE001 —— 旧库 / 无表都不影响启动
+            return None
+        if not latest or not latest["items"]:
+            return None
+        topics = [{"word": item["word"], "heat": item.get("hot_value") or "",
+                   "mark": "", "why": ""} for item in latest["items"]]
+        stamp = latest["fetched_at"][:16].replace("T", " ")
+        return {"topics": topics, "usable": 0, "fetched_at": latest["fetched_at"],
+                "note": f"本地快照 {stamp}，正在后台刷新"}
 
     def hot_board(self):
         """抓取抖音实时热点并做 AI 可用性评估（同步入口，供后台任务调用）。"""
@@ -114,7 +159,7 @@ class DesktopService:
         async def run():
             ctx = AppContext.create(cfg)
             try:
-                return await load_hot_board(ctx)
+                return await load_hot_board(ctx, headless=True)
             finally:
                 if ctx.session is not None:
                     await ctx.session.stop()
@@ -125,7 +170,7 @@ class DesktopService:
         except Exception as exc:  # noqa: BLE001 —— 失败也返回失败态给面板
             return {"error": f"热点获取失败：{type(exc).__name__}：{str(exc)[:140]}", "fetched_at": ""}
 
-    def save_settings(self, api_key: str, model: str):
+    def save_settings(self, api_key: str, model: str, reasoning_effort: str | None = None):
         target = self.paths.config_dir / "llm.local.yaml"
         data = yaml.safe_load(target.read_text(encoding="utf-8")) if target.exists() else {}
         data = {} if data is None else data
@@ -138,6 +183,9 @@ class DesktopService:
         if api_key.strip():
             llm["api_key"] = api_key.strip()
         llm.update({"provider": "deepseek", "model": model})
+        effort = (reasoning_effort or "").strip().lower()
+        if effort in ("low", "high", "max"):
+            llm["reasoning_effort"] = effort
         data["llm"] = llm
         target.parent.mkdir(parents=True, exist_ok=True)
         fd, temporary = tempfile.mkstemp(prefix=".llm-", suffix=".yaml", dir=target.parent)

@@ -320,11 +320,13 @@ class LLMConfig:
     provider: str = "deepseek"
     api_key: str = ""
     base_url: str = "https://api.deepseek.com"
-    model: str = "deepseek-chat"
+    model: str = "deepseek-flash"
     timeout_s: int = 120
     max_retries: int = 2
     max_concurrency: int = 3
     temperature: float = 0.3
+    # 思考强度（low / high / max）：只有开启 thinking 的调用才生效，配置可覆盖。
+    reasoning_effort: str = "high"
     # 喂给模型的作品采样：全塞会超上下文，也费钱
     works_top_by_likes: int = 10
     works_recent: int = 6
@@ -342,13 +344,15 @@ class SearchConfig:
     - ""（默认）：自动模式——有 DeepSeek Key 就用服务端搜索，没有则提示先配置；
     - "deepseek"：DeepSeek 服务端搜索。复用 llm.api_key，不另要搜索 Key；
       搜索在 DeepSeek 服务器执行、按量计费（usage.server_tool_use.web_search_requests）；
+    - "deepseek_api"：DeepSeek Search 接口（/v1/tools/search），返回原始结构化结果
+      （title / url / summary / date / authority），不做模型摘要；
     - "tavily" / "bocha"：第三方搜索 API，需要 api_key；
     - "off"：关闭联网搜索（web_search 直接说明已关闭）。
     """
     provider: str = ""
     api_key: str = ""
     # deepseek 服务端搜索的模型与端点；base_url 留空 = llm.base_url + /anthropic/v1
-    model: str = "deepseek-v4-flash"
+    model: str = "deepseek-flash"
     base_url: str = ""
 
     @property

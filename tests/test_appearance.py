@@ -62,7 +62,7 @@ def test_theme_switch_preserves_drafts_history_and_existing_sections(qt_app, ctx
         assert pane.conversation_id == conversation_id
         assert [bubble.toPlainText() for bubble in pane.transcript.findChildren(SafeMessageBrowser)] == contents
         assert [window.nav.item(i).text() for i in range(window.nav.count())] == [name for name, _ in PAGES]
-        assert [pane.right_tabs.tabText(i) for i in range(pane.right_tabs.count())] == ["抖音热点", "内容方案", "可视化"]
+        assert [pane.right_tabs.tabText(i) for i in range(pane.right_tabs.count())] == ["抖音热点", "内容方案"]
         window.appearance_combo.setCurrentIndex(window.appearance_combo.findData("light"))
         assert window.appearance_mode == "light" and window.appearance_button.text() == "浅色"
         assert pane.composer.toPlainText() == "尚未发送的下一条需求"

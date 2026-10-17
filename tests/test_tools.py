@@ -68,6 +68,59 @@ def test_web_fetch_extracts_readable_text(ctx, monkeypatch):
     assert "var x" not in result["content"]
 
 
+def test_web_fetch_prefers_deepseek_markdown_and_archives(ctx, monkeypatch):
+    ctx.config = dc_replace(ctx.config, llm=dc_replace(ctx.config.llm, api_key="k"))
+    monkeypatch.setattr(web, "_deepseek_fetch", lambda config, url: {
+        "title": "示例页", "content": "# 标题\n\n- 列表项\n\n正文段落"})
+    result = asyncio.run(registry.execute(ctx, "web_fetch", "steward", {"url": "https://example.com/a"}))
+    assert result["ok"] is True and "服务端抓取" in result["summary"]
+    assert "# 标题" in result["content"]
+    row = ctx.db.query_one("SELECT source, content_type FROM raw_blobs WHERE source='web_fetch'")
+    assert row is not None and row["content_type"] == "text/markdown"
+
+
+def test_web_fetch_falls_back_when_server_rejects(ctx, monkeypatch):
+    import urllib.error
+    ctx.config = dc_replace(ctx.config, llm=dc_replace(ctx.config.llm, api_key="k"))
+
+    def rejected(config, url):
+        raise urllib.error.HTTPError(url, 403, "Forbidden", None, None)
+
+    def fake_get(url, timeout=25):
+        return 200, "<html><body><p>本地正文</p></body></html>".encode("utf-8"), "text/html; charset=utf-8"
+
+    monkeypatch.setattr(web, "_deepseek_fetch", rejected)
+    monkeypatch.setattr(web, "_http_get", fake_get)
+    result = asyncio.run(registry.execute(ctx, "web_fetch", "steward", {"url": "https://example.com/b"}))
+    assert result["ok"] is True and "本地读取" in result["summary"]
+    assert "本地正文" in result["content"]
+
+
+def test_web_search_deepseek_api_formats_sources(ctx, monkeypatch):
+    ctx.config = dc_replace(ctx.config, llm=dc_replace(ctx.config.llm, api_key="k"),
+                            search=SearchConfig(provider="deepseek_api"))
+    monkeypatch.setattr(web, "_deepseek_search_api", lambda config, query, count, ori_question="": [
+        {"title": "新闻一", "url": "https://s.com/1", "summary": "摘要一",
+         "date": "2026-10-16T08:00:00+00:00", "authority": 3},
+        {"title": "博客二", "url": "https://s.com/2", "summary": "摘要二", "authority": 1},
+    ])
+    result = asyncio.run(registry.execute(ctx, "web_search", "steward", {"query": "热点"}))
+    assert result["ok"] is True and "DeepSeek 搜索 API" in result["summary"]
+    assert "2026-10-16" in result["content"] and "权威源" in result["content"]
+    assert "https://s.com/1" in result["content"] and "摘要二" in result["content"]
+
+
+def test_web_search_deepseek_api_reports_insufficient_balance(ctx, monkeypatch):
+    import urllib.error
+    ctx.config = dc_replace(ctx.config, llm=dc_replace(ctx.config.llm, api_key="k"),
+                            search=SearchConfig(provider="deepseek_api"))
+
+    def broken(config, query, count, ori_question=""):
+        raise urllib.error.HTTPError("https://api.deepseek.com", 402, "Payment Required", None, None)
+
+    monkeypatch.setattr(web, "_deepseek_search_api", broken)
+    result = asyncio.run(registry.execute(ctx, "web_search", "steward", {"query": "热点"}))
+    assert result["ok"] is False and "余额不足" in result["summary"]
 def test_web_fetch_rejects_bad_url(ctx):
     result = asyncio.run(registry.execute(ctx, "web_fetch", "steward", {"url": "file:///etc/passwd"}))
     assert result["ok"] is False
@@ -281,6 +334,15 @@ def test_data_overview_reports_counts(ctx):
     result = asyncio.run(registry.execute(ctx, "data_overview", "data", {}))
     assert result["ok"] is True
     assert "作品" in result["content"] and "互动者" in result["content"]
+
+
+def test_data_overview_handles_recorded_account(ctx):
+    """回归：query_one 返回 sqlite3.Row，直接 .get() 会 AttributeError。"""
+    ctx.users.upsert({"sec_uid": "owner", "nickname": "本人账号"})
+    ctx.cursors.set("self_sec_uid", "owner")
+    result = asyncio.run(registry.execute(ctx, "data_overview", "data", {}))
+    assert result["ok"] is True
+    assert "本人账号" in result["content"]
 
 
 def test_records_search_empty_and_bad_view(ctx):

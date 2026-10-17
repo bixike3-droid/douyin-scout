@@ -76,7 +76,7 @@ def test_stop_workflow_keeps_previous_artifacts_and_can_continue(qt_app, ctx, mo
         pane.generate_button.click()
         card = pane.workflow_card
         pump(qt_app, lambda: card.run is not None and len(card.run["artifacts"]) == 3 and card.run["steps"][3]["status"] == "running", timeout=10)
-        assert pane.generate_button.text() == "停止" and not card.resume.isEnabled()
+        assert pane.generate_button.toolTip() == "停止" and not card.resume.isEnabled()
         pane.generate_button.click()
         pump(qt_app, lambda: settled(window) and card.run["status"] == "cancelled", timeout=10)
         assert len(card.run["artifacts"]) == 3

@@ -10,15 +10,21 @@ DeepSeek 兼容 OpenAI 的 /chat/completions 协议，所以换供应商只要�
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import logging
+import mimetypes
 import threading
 import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from ..config import LLMConfig
+
+log = logging.getLogger(__name__)
 
 
 class LLMError(RuntimeError):
@@ -39,6 +45,9 @@ class LLMReply:
     reasoning: str = ""
     reasoning_tokens: int = 0
     tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    # 硬盘前缀缓存命中情况：命中部分按约 1/50 计价
+    cache_hit_tokens: int = 0
+    cache_miss_tokens: int = 0
 
     @property
     def total_tokens(self) -> int:
@@ -70,6 +79,11 @@ def _post_json(url: str, payload: dict, headers: dict, timeout: float) -> dict:
 def _reasoning_tokens(usage: dict) -> int:
     details = usage.get("completion_tokens_details") or {}
     return int(details.get("reasoning_tokens") or 0)
+
+
+def _cache_tokens(usage: dict) -> tuple[int, int]:
+    return (int(usage.get("prompt_cache_hit_tokens") or 0),
+            int(usage.get("prompt_cache_miss_tokens") or 0))
 
 
 def _post_stream(
@@ -173,6 +187,7 @@ class DeepSeekClient:
         max_tokens: int = 2000,
         history: list[dict[str, str]] | None = None,
         thinking: bool = False,
+        effort: str | None = None,
         on_delta: Callable[[str, str], None] | None = None,
         stop_event: threading.Event | None = None,
         tools: list[dict[str, Any]] | None = None,
@@ -182,7 +197,7 @@ class DeepSeekClient:
             system,
             [*(history or []), {"role": "user", "content": user}],
             json_mode=json_mode, temperature=temperature, max_tokens=max_tokens,
-            thinking=thinking, on_delta=on_delta, stop_event=stop_event, tools=tools)
+            thinking=thinking, effort=effort, on_delta=on_delta, stop_event=stop_event, tools=tools)
 
     async def chat_messages(
         self,
@@ -193,6 +208,7 @@ class DeepSeekClient:
         temperature: float | None = None,
         max_tokens: int = 2000,
         thinking: bool = False,
+        effort: str | None = None,
         on_delta: Callable[[str, str], None] | None = None,
         stop_event: threading.Event | None = None,
         tools: list[dict[str, Any]] | None = None,
@@ -200,6 +216,7 @@ class DeepSeekClient:
         """多轮对话调用（支持 tool 消息与 function calling）。
 
         - thinking=True 请求思维链（DeepSeek thinking 模式，返回 reasoning_content）。
+        - effort 控制思考强度（low / high / max），默认取配置里的 reasoning_effort。
         - on_delta 非空时用流式：每段增量回调 on_delta(kind, text)，
           kind 为 "reasoning"（思维链）或 "content"（正式回答）。
         - tools 非空时携带工具定义；模型可能返回 tool_calls（流式同样支持）。
@@ -224,6 +241,9 @@ class DeepSeekClient:
         thinking_requested = thinking
         if thinking_requested:
             payload["thinking"] = {"type": "enabled"}
+            strength = (effort or getattr(self.cfg, "reasoning_effort", "") or "high").strip().lower()
+            if strength in ("low", "high", "max"):
+                payload["reasoning_effort"] = strength
 
         headers = {
             "Content-Type": "application/json",
@@ -252,6 +272,10 @@ class DeepSeekClient:
                     thinking_requested = False
                     payload.pop("thinking", None)
                     continue
+                if "reasoning_effort" in str(exc).lower():
+                    # 旧端点不认思考档位：去掉这个参数再试，不影响主流程。
+                    payload.pop("reasoning_effort", None)
+                    continue
                 # 认证类错误重试没意义
                 if "401" in str(exc) or "402" in str(exc) or "403" in str(exc):
                     raise
@@ -268,7 +292,8 @@ class DeepSeekClient:
                     last_err = LLMError("流式响应没有内容")
                     await asyncio.sleep(1.5 * (attempt + 1))
                     continue
-                return LLMReply(
+                hit, miss = _cache_tokens(usage)
+                reply = LLMReply(
                     text=content,
                     model=raw.get("model") or self.cfg.model,
                     prompt_tokens=int(usage.get("prompt_tokens") or 0),
@@ -278,7 +303,11 @@ class DeepSeekClient:
                     reasoning=reasoning,
                     reasoning_tokens=_reasoning_tokens(usage),
                     tool_calls=tool_calls,
+                    cache_hit_tokens=hit,
+                    cache_miss_tokens=miss,
                 )
+                log.info("llm stream model=%s cache_hit=%s cache_miss=%s", reply.model, hit, miss)
+                return reply
 
             choices = raw.get("choices") or []
             if not choices:
@@ -292,7 +321,8 @@ class DeepSeekClient:
                 tool_calls.append({"id": str(call.get("id") or ""),
                                    "name": str(function.get("name") or ""),
                                    "arguments": str(function.get("arguments") or "")})
-            return LLMReply(
+            hit, miss = _cache_tokens(usage)
+            reply = LLMReply(
                 text=(message.get("content") or "").strip(),
                 model=raw.get("model") or self.cfg.model,
                 prompt_tokens=int(usage.get("prompt_tokens") or 0),
@@ -302,9 +332,34 @@ class DeepSeekClient:
                 reasoning=(message.get("reasoning_content") or "").strip(),
                 reasoning_tokens=_reasoning_tokens(usage),
                 tool_calls=tool_calls,
+                cache_hit_tokens=hit,
+                cache_miss_tokens=miss,
             )
+            log.info("llm model=%s cache_hit=%s cache_miss=%s", reply.model, hit, miss)
+            return reply
 
         raise LLMError(f"重试 {self.cfg.max_retries} 次仍失败：{last_err}")
+
+    async def vision_json(self, prompt: str, image_path: str | Path, *, system: str = "",
+                          max_tokens: int = 900) -> LLMReply:
+        """图片理解（仅 deepseek-flash 支持）：返回 JSON 文本，用于读后台截图。
+
+        图片以 base64 data URL 内联（≤32MB；不传给 Files API，避免客户素材上云留存）。
+        """
+        path = Path(image_path)
+        data = path.read_bytes()
+        if len(data) > 32 * 1024 * 1024:
+            raise LLMError("截图超过 32MB，请先压缩再试")
+        media_type = mimetypes.guess_type(path.name)[0] or "image/png"
+        if media_type not in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+            media_type = "image/png"
+        inline = base64.b64encode(data).decode("ascii")
+        messages = [{"role": "user", "content": [
+            {"type": "text", "text": prompt},
+            {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{inline}"}},
+        ]}]
+        return await self.chat_messages(system or "你是严谨的数据录入助手，只输出 JSON。", messages,
+                                        json_mode=True, max_tokens=max_tokens, temperature=0.0)
 
     async def ping(self) -> dict:
         """连通性自检。面板和 doctor 用它。"""

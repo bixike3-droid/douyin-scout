@@ -6,6 +6,7 @@ import logging
 import os
 import sys
 import threading
+import time
 from pathlib import Path
 
 
@@ -54,8 +55,10 @@ def main(default_root: Path | None = None) -> int:
     app.setApplicationDisplayName("源镜")
     app.setOrganizationName("源镜")
     try:
+        from PySide6.QtCore import QTimer
         from .runtime import prepare_runtime
         from .service import DesktopService
+        from .splash import Splash
         from .window import MainWindow
 
         if getattr(sys, "frozen", False):
@@ -75,7 +78,31 @@ def main(default_root: Path | None = None) -> int:
         if args.dev_mode and not getattr(sys, "frozen", False):
             from .dev import DevReload
             window.dev_reload = DevReload(window, Path(__file__).resolve().parents[3])
-        window.show()
+        # 启动页：真实阶段文案，最短 0.8s（避免一闪而过）、最长 6s（不让网络拖住）
+        splash = Splash(motion=getattr(window, "motion_enabled", True))
+        splash.show_centered()
+        window.hide()
+        started = time.monotonic()
+        ticker = QTimer()
+
+        def stage_text():
+            if not window.initialized:
+                return "正在读取本地数据"
+            if not window.enterprise.hot_panel.loaded_once:
+                return "正在同步抖音热榜"
+            return "准备就绪"
+
+        def tick():
+            elapsed = time.monotonic() - started
+            splash.set_stage(stage_text())
+            if (window.initialized and elapsed >= 0.8) or elapsed >= 6.0:
+                ticker.stop()
+                window.show()
+                window.raise_()
+                splash.finish()
+
+        ticker.timeout.connect(tick)
+        ticker.start(120)
         return app.exec()
     except Exception as exc:
         logging.exception("Desktop startup failed")

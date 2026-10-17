@@ -7,5 +7,8 @@ from . import web  # noqa: F401
 from . import hot  # noqa: F401
 from . import data  # noqa: F401
 from . import collect  # noqa: F401
+from . import delegate  # noqa: F401
+from . import insight  # noqa: F401
+from . import enterprise_tools  # noqa: F401
 
-__all__ = ["registry", "web", "hot", "data", "collect"]
+__all__ = ["registry", "web", "hot", "data", "collect", "delegate", "insight", "enterprise_tools"]

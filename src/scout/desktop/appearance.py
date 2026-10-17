@@ -16,6 +16,9 @@ THEMES = {
         "user": "#E4F0FF", "assistant": "#F2F2F7", "scroll": "#C6C6CC", "success": "#1E7A3C",
         "warning": "#995700", "warning_bg": "#FFF4E0", "danger": "#D70015", "danger_bg": "#FFECEE",
         "success_bg": "#E9F7EE", "shadow": "#D5D8DF", "code": "#F2F2F7",
+        "composer_bg": "rgba(255, 255, 255, 0.72)",
+        "composer_border": "rgba(0, 0, 0, 0.10)",
+        "composer_ring": "rgba(29, 29, 31, 0.55)",
     },
     "dark": {
         "window": "#1C1C1E", "surface": "#26262A", "sidebar": "#222226", "sidebar_end": "#1F1F22",
@@ -26,6 +29,9 @@ THEMES = {
         "user": "#263D59", "assistant": "#26262A", "scroll": "#5C5C64", "success": "#6DD5A5",
         "warning": "#F0C674", "warning_bg": "#3B3323", "danger": "#FF9BAC", "danger_bg": "#442C34",
         "success_bg": "#253E35", "shadow": "#101014", "code": "#2E2E33",
+        "composer_bg": "rgba(56, 56, 62, 0.72)",
+        "composer_border": "rgba(255, 255, 255, 0.16)",
+        "composer_ring": "rgba(255, 255, 255, 0.55)",
     },
 }
 
@@ -119,8 +125,12 @@ QFrame#card, QFrame#detailCard { background: $surface; border: 1px solid $border
 QWidget#conversationPane, QWidget#conversationBody { background: $surface; }
 QWidget#resultPane { background: $toolbar; border-left: 1px solid $border; }
 QWidget#resultBody { background: $surface; }
-QFrame#composerBox { background: $surface; border: 1px solid $border; border-radius: 18px; }
-QPlainTextEdit#composer { background: transparent; border: none; color: $text; font-size: 13px; padding: 3px; }
+QFrame#composerBox { background: $composer_bg; border: 1px solid $composer_border; border-radius: 22px; }
+QPlainTextEdit#composer { background: transparent; border: none; color: $text; font-size: 13px; padding: 2px 4px; }
+QPushButton#sendCircle { background: $accent; border: none; border-radius: 19px; }
+QPushButton#sendCircle:hover { background: $accent_hover; }
+QPushButton#sendCircle:pressed { background: $accent_pressed; }
+QPushButton#sendCircle:disabled { background: $subtle; }
 QFrame#workflowCard { background: $assistant; border: 1px solid $border; border-radius: 12px; }
 QLabel#workflowTitle { color: $text; font-size: 13px; font-weight: 600; }
 QLabel#workflowSteps { color: $muted; font-size: 12px; }
@@ -146,6 +156,13 @@ QLabel#hotBadge { background: $subtle; color: $muted; border-radius: 999px; padd
 QLabel#hotBadge[mark="可用"] { background: $success_bg; color: $success; }
 QLabel#hotBadge[mark="参考"] { background: $warning_bg; color: $warning; }
 QFrame#diagramCard, QFrame#confirmCard { background: $surface; border: 1px solid $border; border-radius: 10px; }
+QFrame#choiceCard { background: $surface; border: 1px solid $border; border-radius: 10px; }
+QLabel#choiceOption { background: $subtle; border: 1px solid transparent; border-radius: 10px; padding: 7px 12px; font-size: 12px; color: $text; }
+QLabel#choiceOption:hover { background: $accent_soft; }
+QLabel#choiceOption[checked="true"] { background: $accent_soft; border-color: $accent; color: $accent; }
+QLabel#choiceOption:disabled { color: $muted; }
+QPushButton#choiceConfirm { background: $accent; color: #FFFFFF; border: none; border-radius: 999px; padding: 7px 16px; font-size: 12px; }
+QPushButton#choiceConfirm:disabled { background: $subtle; color: $muted; }
 QLabel#diagramImage { color: $muted; }
 QFrame#topicCard { background: $surface; border: none; border-top: 1px solid $border; border-radius: 0; }
 QFrame#reasoningPanel { background: $subtle; border: 1px solid $border; border-radius: 8px; }
@@ -165,7 +182,6 @@ QFrame#stepLine { background: $border; }
 QLineEdit, QComboBox, QSpinBox { background: $surface; color: $text; border: 1px solid $border; border-radius: 6px; padding: 7px 10px; min-height: 20px; selection-background-color: $selection; selection-color: $text; }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border: 1px solid $accent; }
 QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled { color: $disabled; background: $disabled_bg; }
-QComboBox::drop-down, QSpinBox::up-button, QSpinBox::down-button { border: none; width: 20px; }
 QComboBox QAbstractItemView { background: $surface; color: $text; selection-background-color: $accent; selection-color: $on_accent; border: 1px solid $border; }
 QCheckBox { color: $text; spacing: 8px; }
 QCheckBox::indicator { width: 15px; height: 15px; }

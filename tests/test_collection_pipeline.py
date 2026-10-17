@@ -235,6 +235,10 @@ def test_page_limited_owner_scan_can_resume_without_duplicate_work(ctx,monkeypat
 
 
 def test_refused_owner_api_uses_known_works_without_repeating_denied_call(ctx,monkeypatch):
+    from scout.collect import user_works_api
+    monkeypatch.setattr(user_works_api, "CAPTURE_TIMEOUT_S", 0.05)
+    monkeypatch.setattr(user_works_api, "CAPTURE_NEXT_TIMEOUT_S", 0.05)
+
     def responder(query,url):
         if "sec_user_id" in query:
             return {},403

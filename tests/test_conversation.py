@@ -117,6 +117,7 @@ def test_thinking_deltas_reach_the_ui_and_reasoning_is_persisted(ctx):
     events = []
     result = asyncio.run(send(ctx, ThinkingTeam(), "打个招呼", emit=events.append))
     assert [e["delta"] for e in events if e.get("type") == "thinking"] == ["先核对资料。", "再回答。"]
+    assert [e["delta"] for e in events if e.get("type") == "answer_delta"] == ["你好。"]
     assert any(e.get("type") == "answering" for e in events)
     assert any(e.get("type") == "assigned" for e in events)
     assistant = result["conversation"]["messages"][-1]

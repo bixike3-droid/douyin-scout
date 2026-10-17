@@ -63,6 +63,35 @@ register(ToolSpec(
     agents=("data",), level="confirm",
     handler=_login))
 
+async def _comments(ctx, args: dict) -> dict:
+    from ..collect.comments_run import collect_for_work
+    from ..desktop.actions import login_status
+
+    if not login_status(ctx.paths)["saved"]:
+        return {"ok": False, "summary": "需要先登录抖音（顶部「登录抖音」）"}
+    aweme_id = str(args.get("aweme_id") or "").strip()
+    try:
+        result = await collect_for_work(ctx, _emit_of(ctx), aweme_id)
+    except ValueError as exc:
+        return {"ok": False, "summary": str(exc)}
+    note = {"sampled": "（按抽样预算采集）", "full": "（已触底）"}.get(result["state"], "")
+    return {"ok": True, "report": result,
+            "summary": f"已采 {result['items']} 条评论{note}",
+            "content": f"作品 {result['aweme_id']} 本地共 {result['items']} 条评论{note}。"
+                       f"要看清内容或高赞观点，可用 work_detail 查看。"}
+
+
+register(ToolSpec(
+    id="collect_comments", name="采集评论",
+    description="采集指定作品的评论区（需要登录态），入库后可按点赞排序查看。"
+                "用户想了解观众反馈、评论倾向时使用；执行前会先让用户确认，会打开浏览器跑几十秒。",
+    parameters={"type": "object",
+                "properties": {"aweme_id": {"type": "string",
+                                            "description": "作品标识，先用 records_search 查出来"}},
+                "required": ["aweme_id"]},
+    agents=("data", "audience"), level="confirm",
+    handler=_comments))
+
 register(ToolSpec(
     id="collect_start", name="开始采集",
     description="启动一轮真实采集：从抖音取回账号数据（点赞与互动者、作品），清洗入库。"

@@ -57,6 +57,33 @@ def test_hot_board_fetch_failure_is_reported(ctx):
     assert "topics" not in data
 
 
+def test_hot_board_falls_back_to_local_snapshot(ctx):
+    from scout.store.hot import HotTopics
+    HotTopics(ctx.db).save_snapshot([{"word": "乡村振兴", "hot_value": 100}], tier="b",
+                                    fetched_at="2026-10-17T09:30:00+00:00")
+
+    async def broken(context):
+        raise RuntimeError("验证码中间页")
+
+    data = asyncio.run(load_hot_board(ctx, fetch=broken))
+    assert [topic["word"] for topic in data["topics"]] == ["乡村振兴"]
+    assert "本地快照" in data["note"]
+
+
+def test_hot_board_requests_headless_refresh(ctx, monkeypatch):
+    """启动刷新走无头档，避免启动时弹出采集浏览器。"""
+    import scout.collect.hot as hot_module
+    seen = {}
+
+    async def fake_fetch(context, *, headless=False):
+        seen["headless"] = headless
+        return _word_payload()
+
+    monkeypatch.setattr(hot_module, "fetch_hot", fake_fetch)
+    data = asyncio.run(load_hot_board(ctx, headless=True))
+    assert seen["headless"] is True and len(data["topics"]) == 2
+
+
 def test_hot_board_eval_failure_keeps_list(ctx):
     ctx.config = dc_replace(ctx.config, llm=dc_replace(ctx.config.llm, api_key="k"))
 

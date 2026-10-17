@@ -1,9 +1,10 @@
 """Yuanjing's three-column task workspace, backed by the enterprise service."""
 from __future__ import annotations
 
+import re
 import sys
 
-from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot
+from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot, QSize
 from PySide6.QtGui import QTextBlockFormat, QTextCursor, QPixmap
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QPushButton, QPlainTextEdit,
     QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel)
@@ -12,7 +13,9 @@ from .enterprise import EnterprisePage, report_time
 from .components import text, ElidedLabel
 from .motion import ActivityDot, Disclosure, fade_in
 from .theme import agent_badge, icon
-from .diagrams import extract_mermaid_blocks, render_png, strip_mermaid_blocks
+from .appearance import color
+from .diagrams import render_png, split_mermaid_blocks
+from .choices import extract_choices
 
 
 def clear_layout(layout):
@@ -23,6 +26,18 @@ def clear_layout(layout):
             widget.hide()
             widget.setParent(None)
             widget.deleteLater()
+
+
+def stream_visible_markdown(text: str) -> str:
+    """流式阶段能看到的部分：去掉半截代码块与选择题块，避免正文闪烁。"""
+    if "```" not in text:
+        return text
+    # 选择题块在正式渲染时会变成按钮，流式阶段先不显示
+    cleaned = re.sub(r"```choices[\s\S]*?(?:```|$)", "", text)
+    # 未闭合的代码块（含 mermaid）只显示围栏之前的内容
+    if cleaned.count("```") % 2 == 1:
+        cleaned = cleaned[: cleaned.rindex("```")]
+    return cleaned.strip()
 
 
 class ReasoningPanel(QFrame):
@@ -116,11 +131,11 @@ class ReasoningPanel(QFrame):
 class Composer(QPlainTextEdit):
     submitted = Signal()
     MIN_HEIGHT = 52
-    MAX_HEIGHT = 150
+    MAX_HEIGHT = 64          # 约两行半，再多就在框内滚动
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # 高度随内容行数自适应（约 1 到 7 行），超过后在框内滚动。
+        # 高度随内容行数自适应，超过两行半后在框内滚动。
         self.document().documentLayout().documentSizeChanged.connect(self._fit_height)
         self.textChanged.connect(self._fit_height)
         self._fit_height()
@@ -220,12 +235,66 @@ class _DiagramWorker(QRunnable):
         self.signals.finished.emit(path)
 
 
+class _ZoomableImage(QLabel):
+    """图片标签：双击发信号（图卡用），不自己处理缩放。"""
+
+    double_clicked = Signal()
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit()
+        super().mouseDoubleClickEvent(event)
+
+
+class DiagramPreview(QDialog):
+    """双击图卡后的放大预览：按屏幕可用尺寸尽量放大，过大时滚动查看。"""
+
+    def __init__(self, pixmap, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("可视化预览")
+        self.setObjectName("diagramPreview")
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 10)
+        layout.setSpacing(8)
+        screen = QApplication.primaryScreen()
+        available = screen.availableGeometry() if screen else self.rect()
+        base = 2.0                       # render_png 产出 2 倍图
+        natural_w, natural_h = pixmap.width() / base, pixmap.height() / base
+        # 预留标题栏、底部提示与窗口边框；预览只适度放大，不做“满屏放大”
+        limit_w, limit_h = available.width() * 0.70, available.height() * 0.70
+        factor = min(1.0, limit_w / max(1.0, natural_w), limit_h / max(1.0, natural_h))
+        physical = max(1, int(round(natural_w * factor * base)))
+        target = (pixmap if physical >= pixmap.width()
+                  else pixmap.scaledToWidth(physical, Qt.TransformationMode.SmoothTransformation))
+        target.setDevicePixelRatio(base)
+        width = int(round(target.width() / base))
+        height = int(round(target.height() / base))
+        holder = QLabel()
+        holder.setPixmap(target)
+        holder.setFixedSize(width, height)
+        scroll = QScrollArea()
+        scroll.setWidget(holder)
+        scroll.setWidgetResizable(False)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        scroll.setFixedSize(min(width + 2, int(limit_w)), min(height + 2, int(limit_h)))
+        layout.addWidget(scroll, 0, Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(text("Esc 或关闭窗口退出预览", "muted"), 0, Qt.AlignmentFlag.AlignCenter)
+        self.adjustSize()
+
+
 class DiagramView(QFrame):
-    """对话里的可视化卡片：mermaid 渲染成图片展示，可复制源码。"""
+    """对话里的可视化卡片：mermaid 渲染成图片展示，双击放大，可复制源码。"""
+
+    rendered = Signal()
+    MAX_HEIGHT = 320          # 卡片内图片高度上限（长图也不撑满屏）
 
     def __init__(self, code):
         super().__init__()
         self.setObjectName("diagramCard")
+        self._source = None
+        self._preview = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(12, 10, 12, 10)
         layout.setSpacing(6)
@@ -238,14 +307,32 @@ class DiagramView(QFrame):
         copy_button.clicked.connect(lambda: QApplication.clipboard().setText(code))
         header.addWidget(copy_button)
         layout.addLayout(header)
-        self.image = QLabel("正在生成可视化…")
+        self.image = _ZoomableImage("正在生成可视化…")
         self.image.setObjectName("diagramImage")
-        self.image.setWordWrap(True)
-        layout.addWidget(self.image)
+        self.image.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        self.image.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.image.setToolTip("双击放大")
+        self.image.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.image.double_clicked.connect(self.open_preview)
+        layout.addWidget(self.image, alignment=Qt.AlignmentFlag.AlignHCenter)
         worker = _DiagramWorker(code)
         worker.signals.finished.connect(self._done)
         QThreadPool.globalInstance().start(worker)
         self._worker = worker
+
+    def open_preview(self):
+        """双击图片：弹出按屏幕尺寸放大的预览窗（重复双击只激活已有窗口）。"""
+        if self._source is None:
+            return
+        try:
+            if self._preview is not None and self._preview.isVisible():
+                self._preview.raise_()
+                self._preview.activateWindow()
+                return
+        except RuntimeError:          # 预览窗已被销毁（WA_DeleteOnClose）
+            self._preview = None
+        self._preview = DiagramPreview(self._source, self)
+        self._preview.show()
 
     def _done(self, path):
         if path is None:
@@ -255,10 +342,43 @@ class DiagramView(QFrame):
         if pixmap.isNull():
             self.image.setText("可视化文件读取失败")
             return
-        target = pixmap.scaledToWidth(min(pixmap.width(), 1040), Qt.TransformationMode.SmoothTransformation)
-        target.setDevicePixelRatio(2)
+        self._source = pixmap
+        self.image.setText("")
+        self._fit()
+        self.rendered.emit()
+
+    def _available_width(self):
+        """对话滚动区的可视宽度（不能用卡片自身宽度，否则会被图片撑宽）。"""
+        widget = self.parentWidget()
+        while widget is not None:
+            if isinstance(widget, QScrollArea):
+                return max(200, widget.viewport().width() - 40)
+            widget = widget.parentWidget()
+        return 560
+
+    def _fit(self):
+        """按原图比例缩小到卡片尺寸内（只缩不放），并居中。"""
+        if self._source is None:
+            return
+        base = 2.0                      # render_png 产出的是 2 倍图
+        natural_w, natural_h = self._source.width() / base, self._source.height() / base
+        factor = min(1.0, self._available_width() / max(1.0, natural_w),
+                     self.MAX_HEIGHT / max(1.0, natural_h))
+        physical = max(1, int(round(natural_w * factor * base)))
+        target = (self._source if physical >= self._source.width()
+                  else self._source.scaledToWidth(physical, Qt.TransformationMode.SmoothTransformation))
+        target.setDevicePixelRatio(base)
+        size = QSize(int(round(target.width() / base)), int(round(target.height() / base)))
+        if self.image.size() == size and self.image.pixmap() and not self.image.pixmap().isNull():
+            return
         self.image.setText("")
         self.image.setPixmap(target)
+        self.image.setFixedSize(size)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._source is not None:
+            self._fit()
 
 
 class HotTopicRow(QFrame):
@@ -352,15 +472,23 @@ class HotBoardPanel(QWidget):
         self.body_layout.addStretch()
 
     def set_loading(self):
-        self.status.setText("正在获取抖音实时热点并评估可用性…（首次会打开一次采集浏览器）")
+        self.status.setText("正在获取抖音实时热点并评估可用性…")
         self.refresh_button.setEnabled(False)
         self._placeholder("获取中…")
 
-    def apply(self, data):
+    def set_refreshing(self):
+        """已有快照时后台刷新：保留现有列表，只改状态行。"""
+        self.status.setText("正在同步抖音实时热点（当前显示的是上次快照）…")
+        self.refresh_button.setEnabled(False)
+
+    def apply(self, data, *, keep_on_error: bool = False):
         self.loaded_once = True
         self.refresh_button.setEnabled(True)
         if not isinstance(data, dict) or data.get("error"):
             message = (data or {}).get("error") if isinstance(data, dict) else "获取失败"
+            if keep_on_error and self._rows:
+                self.status.setText(f"{message or '刷新失败'}（继续显示上次快照）")
+                return
             self.status.setText(str(message or "获取失败"))
             self._placeholder("点右上角「刷新」重试")
             return
@@ -393,64 +521,108 @@ class HotBoardPanel(QWidget):
         self.topic_clicked.emit(request)
 
 
-class CanvasPanel(QWidget):
-    """右侧「可视化」：展示 AI 在对话里最新生成的一张图。"""
+class ChoiceOption(QLabel):
+    """选择题选项：可按宽度换行，长选项不会把对话气泡横向撑开。"""
 
-    def __init__(self):
+    clicked = Signal()
+
+    def __init__(self, value, parent=None):
+        super().__init__(value, parent)
+        self.value = value
+        self.setObjectName("choiceOption")
+        self.setWordWrap(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.setProperty("checked", False)
+
+    def mouseReleaseEvent(self, event):
+        if self.isEnabled() and event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mouseReleaseEvent(event)
+
+    def set_checked(self, value):
+        self.setProperty("checked", bool(value))
+        self.style().unpolish(self)
+        self.style().polish(self)
+
+
+class ChoiceCard(QFrame):
+    """AI 给出的下一步选择题：点选项即继续对话（多选时点「就用这些继续」）。"""
+
+    submitted = Signal(str)
+    MAX_WIDTH = 430          # 卡片宽度上限：选项再多也只换行，不撑宽对话区
+    COLUMNS = 2
+
+    def __init__(self, questions):
         super().__init__()
-        self.current_code = ""
-        self._worker = None
+        self.setObjectName("choiceCard")
+        self.setMaximumWidth(self.MAX_WIDTH)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self._questions = list(questions)
+        self._selected = [set() for _ in questions]
+        self._groups = []
+        self._done = False
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 14, 0, 0)
-        layout.setSpacing(10)
-        header = QHBoxLayout()
-        self.hint = text("团队在分析里自动生成的流程图、时间线、对比图会显示在这里；"
-                         "也可以直接对团队说：「画个流程示意图」。", "muted")
-        header.addWidget(self.hint, 1)
-        self.copy_button = QPushButton("复制源码")
-        self.copy_button.setObjectName("linkButton")
-        self.copy_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.copy_button.setEnabled(False)
-        self.copy_button.clicked.connect(lambda: QApplication.clipboard().setText(self.current_code))
-        header.addWidget(self.copy_button)
-        layout.addLayout(header)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        body = QWidget()
-        body_layout = QVBoxLayout(body)
-        body_layout.setContentsMargins(0, 0, 6, 0)
-        self.image = QLabel("")
-        self.image.setWordWrap(True)
-        self.image.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        body_layout.addWidget(self.image)
-        body_layout.addStretch()
-        scroll.setWidget(body)
-        layout.addWidget(scroll, 1)
+        layout.setContentsMargins(12, 10, 12, 12)
+        layout.setSpacing(8)
+        for index, question in enumerate(questions):
+            layout.addWidget(text(question["title"], "muted"))
+            grid = QGridLayout()
+            grid.setContentsMargins(0, 0, 0, 0)
+            grid.setHorizontalSpacing(8)
+            grid.setVerticalSpacing(8)
+            buttons = []
+            for position, option in enumerate(question["options"]):
+                button = ChoiceOption(option)
+                button.clicked.connect(lambda i=index, value=option, b=button: self._toggle(i, value, b))
+                row, column = divmod(position, self.COLUMNS)
+                grid.addWidget(button, row, column)
+                buttons.append(button)
+            for column in range(self.COLUMNS):
+                grid.setColumnStretch(column, 1)
+            layout.addLayout(grid)
+            self._groups.append(buttons)
+        self.confirm = QPushButton("就用这些继续")
+        self.confirm.setObjectName("choiceConfirm")
+        self.confirm.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.confirm.setEnabled(False)
+        self.confirm.clicked.connect(self._submit)
+        # 单个单选题：点选项就直接继续；“多题/多选”用确认按钮避免误发
+        self._auto = len(questions) == 1 and not questions[0]["multi"]
+        self.confirm.setVisible(not self._auto)
+        layout.addWidget(self.confirm, alignment=Qt.AlignmentFlag.AlignLeft)
 
-    def show_diagram(self, code):
-        code = (code or "").strip()
-        if not code or code == self.current_code:
+    def _toggle(self, index, value, button):
+        if self._done:
             return
-        self.current_code = code
-        self.hint.setText("正在生成可视化…")
-        self.copy_button.setEnabled(True)
-        worker = _DiagramWorker(code)
-        worker.signals.finished.connect(self._done)
-        self._worker = worker
-        QThreadPool.globalInstance().start(worker)
+        if self._questions[index]["multi"]:
+            if not button.property("checked"):
+                self._selected[index].add(value)
+            else:
+                self._selected[index].discard(value)
+            button.set_checked(not button.property("checked"))
+        else:
+            self._selected[index] = {value}
+            for other in self._groups[index]:
+                other.set_checked(other is button)
+        if self._auto:
+            self._submit()
+        else:
+            self.confirm.setEnabled(all(self._selected))
 
-    def _done(self, path):
-        if path is None:
-            self.hint.setText("可视化生成失败（本地渲染与在线兜底都不可用）")
+    def _submit(self):
+        if self._done or any(not selected for selected in self._selected):
             return
-        pixmap = QPixmap(str(path))
-        if pixmap.isNull():
-            self.hint.setText("可视化文件读取失败")
-            return
-        target = pixmap.scaledToWidth(min(pixmap.width(), 720), Qt.TransformationMode.SmoothTransformation)
-        target.setDevicePixelRatio(2)
-        self.image.setPixmap(target)
-        self.hint.setText("最新一张 · 团队分析时自动生成")
+        self._done = True
+        self.confirm.setEnabled(False)
+        for buttons in self._groups:
+            for button in buttons:
+                button.setEnabled(False)
+        lines = []
+        for question, selected in zip(self._questions, self._selected):
+            ordered = [option for option in question["options"] if option in selected]
+            lines.append(f"{question['title']}：{'、'.join(ordered)}")
+        self.submitted.emit("\n".join(lines))
 
 
 class WorkflowCard(QFrame):
@@ -552,8 +724,17 @@ class HarnessPage(EnterprisePage):
         self.conversation_data = None
         self.forms_dialog = None
         self.reasoning_panel = None
+        # 流式回复：正文边写边显，完成后由正式渲染替换
+        self.stream_bubble = None
+        self._stream_text = ""
+        self._stream_timer = QTimer(self)
+        self._stream_timer.setSingleShot(True)
+        self._stream_timer.setInterval(120)
+        self._stream_timer.timeout.connect(self._flush_stream)
         # 待用户确认的工具卡：request_id → 卡片控件
         self._confirmation_cards: dict = {}
+        # 已选过并已继续对话的选择题（消息键），重渲染后不再重复出现
+        self._answered_choices: set = set()
         # 已渲染到对话流里的消息条数；同会话续聊时据此只追加新条目，不整块重建。
         self._rendered_count = 0
         self._scroll_animation = None
@@ -570,10 +751,11 @@ class HarnessPage(EnterprisePage):
         self.tabs.setTabVisible(1, False)
         self.generate_button.clicked.disconnect()
         self.generate_button.clicked.connect(self._on_generate)
-        self.generate_button.setText("发送")
-        self.generate_button.setObjectName("sendButton")
-        self.generate_button.setIcon(icon("send", "#FFFFFF", 19))
-        self.generate_button.setFixedWidth(82)
+        self.generate_button.setText("")
+        self.generate_button.setObjectName("sendCircle")
+        self.generate_button.setIcon(icon("send", "#FFFFFF", 18))
+        self.generate_button.setFixedSize(38, 38)
+        self.generate_button.setToolTip("发送")
         self.generate_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self._build_workspace()
 
@@ -706,15 +888,20 @@ class HarnessPage(EnterprisePage):
         composer_box = QFrame()
         composer_box.setObjectName("composerBox")
         from .components import soft_shadow
-        soft_shadow(composer_box, blur=24, dy=3, alpha=40)
+        soft_shadow(composer_box, blur=34, dy=8, alpha=64)
         box = QVBoxLayout(composer_box)
-        box.setContentsMargins(14, 10, 14, 10)
-        box.setSpacing(6)
+        box.setContentsMargins(14, 8, 8, 8)
+        box.setSpacing(2)
         self.composer = Composer()
         self.composer.setObjectName("composer")
         self.composer.setPlaceholderText("对源镜团队说点什么…")
         self.composer.submitted.connect(self._generate)
-        box.addWidget(self.composer)
+        input_row = QHBoxLayout()
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.setSpacing(8)
+        input_row.addWidget(self.composer, 1)
+        input_row.addWidget(self.generate_button, 0, Qt.AlignmentFlag.AlignVCenter)
+        box.addLayout(input_row)
         row = QHBoxLayout()
         self.force.hide()
         self.plan_button = QPushButton("生成方案")
@@ -722,10 +909,8 @@ class HarnessPage(EnterprisePage):
         self.plan_button.clicked.connect(self._request_plan)
         row.addWidget(self.plan_button)
         row.addStretch()
-        row.addWidget(self.generate_button)
         box.addLayout(row)
         main.addWidget(composer_box)
-        main.addWidget(text("Enter 发送 · Shift + Enter 换行 · 复杂任务由团队接力完成", "composerHint"))
         self.splitter.addWidget(center)
         right = QWidget()
         right.setObjectName("resultPane")
@@ -749,8 +934,7 @@ class HarnessPage(EnterprisePage):
         self.hot_panel.topic_clicked.connect(self._analyze_hot_topic)
         self.right_tabs.addTab(self.hot_panel, "抖音热点")
         self.right_tabs.addTab(self.plan_scroll, "内容方案")
-        self.canvas_panel = CanvasPanel()
-        self.right_tabs.addTab(self.canvas_panel, "可视化")
+        # 可视化不再单独占右栏：mermaid 图直接出现在对话里（DiagramView）
         # 旧「参考素材 / 人工稿」不再占标签，控件与逻辑保留在隐藏容器里
         self._legacy_pane = QWidget()
         legacy_layout = QVBoxLayout(self._legacy_pane)
@@ -963,6 +1147,7 @@ class HarnessPage(EnterprisePage):
             preview.setOpenExternalLinks(False)
             preview.setOpenLinks(False)
             preview.setMarkdown(report["revisions"][-1]["content"])
+            style_tables(preview)
             preview.setMinimumHeight(550)
             self.plan_layout.addWidget(preview)
         else:
@@ -1015,8 +1200,9 @@ class HarnessPage(EnterprisePage):
             self._set_reply_status(message or ("模型正在回复…" if busy else ""), busy or bool(message))
         elif message:
             self.assistant_bubble.setText(message)
-        self.generate_button.setText("停止" if busy else "发送")
-        self.generate_button.setIcon(icon("stop", "#FFFFFF", 17) if busy else icon("send", "#FFFFFF", 19))
+        self.generate_button.setText("")
+        self.generate_button.setToolTip("停止" if busy else "发送")
+        self.generate_button.setIcon(icon("stop", "#FFFFFF", 16) if busy else icon("send", "#FFFFFF", 18))
         if not busy:
             self._update_stages()
 
@@ -1060,6 +1246,7 @@ class HarnessPage(EnterprisePage):
                 widget.show()
             self._rendered_count = len(messages)
             self._scroll_chat_bottom(force=True)
+            self._schedule_fit()
         else:
             self._render_messages(messages)
         self.begin_reasoning()
@@ -1076,6 +1263,7 @@ class HarnessPage(EnterprisePage):
     def begin_reasoning(self):
         """发送后立即在对话流里占位"正在思考…"，替代右下角进度条。"""
         self.abort_reasoning()
+        self.end_answer()
         self.reasoning_panel = ReasoningPanel(running=True, motion=self.motion_enabled)
         self.transcript_layout.addWidget(self.reasoning_panel)
         self.reasoning_panel.show()
@@ -1093,6 +1281,68 @@ class HarnessPage(EnterprisePage):
     def mark_answering(self):
         if self.reasoning_panel is not None:
             self.reasoning_panel.mark_answering()
+
+    def begin_answer(self):
+        """为“正在撰写”的正文占位一个气泡；后续增量往里填。"""
+        if self.stream_bubble is not None:
+            return
+        bubble = SafeMessageBrowser()
+        bubble.setOpenLinks(False)
+        bubble.setOpenExternalLinks(False)
+        bubble.setObjectName("messageBubble")
+        bubble.setProperty("messageRole", "assistant")
+        bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        bubble.document().setTextWidth(self._bubble_width())
+        bubble.setMinimumHeight(40)
+        self.transcript.show()
+        self.transcript_layout.addWidget(bubble)
+        bubble.show()
+        self.stream_bubble = bubble
+        self._stream_text = ""
+        self.mark_answering()
+        self._scroll_chat_bottom(smooth=False)
+
+    def append_answer(self, delta):
+        if not delta:
+            return
+        self.begin_answer()
+        self._stream_text += str(delta)
+        if not self._stream_timer.isActive():
+            self._stream_timer.start()
+
+    def _flush_stream(self):
+        bubble = self.stream_bubble
+        if bubble is None:
+            return
+        try:
+            bubble.setMarkdown(stream_visible_markdown(self._stream_text) or "…")
+            style_tables(bubble)
+            cursor = QTextCursor(bubble.document())
+            cursor.select(QTextCursor.SelectionType.Document)
+            block_format = QTextBlockFormat()
+            block_format.setLineHeight(145, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            cursor.mergeBlockFormat(block_format)
+            bubble.document().setTextWidth(self._bubble_width())
+            bubble.setFixedHeight(self._bubble_height(bubble))
+            self._fit_bubble(bubble)
+            # 控件刚插入还没定宽，稍微重测一次（与窗口缩放共用同一个合批计时器）
+            self._bubble_timer.start()
+        except RuntimeError:
+            self.stream_bubble = None
+            return
+        self._scroll_chat_bottom(smooth=False)
+
+    def end_answer(self):
+        """结束流式展示：正式消息渲染前把临时气泡拿掉。"""
+        if self._stream_timer.isActive():
+            self._stream_timer.stop()
+        bubble = self.stream_bubble
+        self.stream_bubble = None
+        self._stream_text = ""
+        if bubble is not None:
+            bubble.hide()
+            bubble.setParent(None)
+            bubble.deleteLater()
 
     def end_reasoning(self, stopped=False):
         if self.reasoning_panel is not None:
@@ -1184,17 +1434,41 @@ class HarnessPage(EnterprisePage):
     def _bubble_height(self, bubble):
         return max(65, int(bubble.document().size().height()) + 32)
 
-    def _relayout_bubbles(self):
+    def _fit_bubble(self, bubble):
+        """按气泡真实可视宽度重新排版并定高。
+
+        不能用对话框宽度估算：气泡实际宽度受外层边距、样式内边距影响，
+        估大了会剩一大块空白，估小了最后一行会被下一条消息或可视化卡片盖住。
+        """
+        viewport = bubble.viewport().width()
+        if viewport <= 40:
+            return
+        document = bubble.document()
+        document.setTextWidth(viewport)
+        margins = bubble.viewportMargins()
+        chrome = 2 * bubble.frameWidth() + margins.top() + margins.bottom()
+        height = int(document.size().height()) + chrome + 2
+        if abs(height - bubble.height()) > 1:
+            bubble.setFixedHeight(max(40, height))
+
+    def _fit_bubbles(self):
         for bubble in self.transcript.findChildren(SafeMessageBrowser):
-            bubble.document().setTextWidth(self._bubble_width())
-            bubble.setFixedHeight(self._bubble_height(bubble))
+            self._fit_bubble(bubble)
         for panel in self.transcript.findChildren(ReasoningPanel):
             panel.relayout()
+
+    def _relayout_bubbles(self):
+        self._fit_bubbles()
+
+    def _schedule_fit(self):
+        """布局完成后再量一次：创建时控件宽高还没定下来。"""
+        QTimer.singleShot(0, self._fit_bubbles)
 
     def apply_conversation(self, data):
         self.conversation_data = data
         self.conversation_id = data["id"]
         self.new_task_mode = False
+        self.end_answer()
         self.task_title.setText(data["title"])
         self.task_date.setText("对话创建：" + report_time(data["created_at"]))
         self._render_messages(data["messages"])
@@ -1265,50 +1539,71 @@ class HarnessPage(EnterprisePage):
         block.addLayout(header)
         if role == "assistant" and (message.get("reasoning") or "").strip():
             block.addWidget(ReasoningPanel(message["reasoning"].strip(), running=False, motion=self.motion_enabled))
+        content = message["content"]
+        questions = []
+        if role == "assistant":
+            content, questions = extract_choices(content)
+        segments = split_mermaid_blocks(content) if role == "assistant" else [("text", content)]
+        if not segments:
+            segments = [("text", content)]
+        bubbles = 0
+        for kind, value in segments:
+            if kind == "mermaid":
+                diagram = DiagramView(value)
+                diagram.rendered.connect(lambda: self._scroll_chat_bottom())
+                block.addWidget(diagram)
+                continue
+            text_body = re.sub(r"\n{3,}", "\n\n", value).strip()
+            if not text_body and bubbles:
+                continue
+            block.addWidget(self._text_bubble(text_body, role))
+            bubbles += 1
+        if questions:
+            key = message.get("id") or hash(content)
+            if key not in self._answered_choices:
+                choice = ChoiceCard(questions)
+                choice.submitted.connect(lambda text, k=key: self._answer_choice(k, text))
+                block.addWidget(choice)
+        return [container]
+
+    def _text_bubble(self, body, role):
+        """一段正文 → 一个气泡（带 Markdown 表格、行距与初始高度）。"""
         bubble = SafeMessageBrowser()
         bubble.setOpenLinks(False)
         bubble.setOpenExternalLinks(False)
-        diagram_codes = extract_mermaid_blocks(message["content"]) if role == "assistant" else []
-        bubble_text = strip_mermaid_blocks(message["content"]) if diagram_codes else message["content"]
-        bubble.setMarkdown(bubble_text)
+        bubble.setObjectName("messageBubble")
+        bubble.setProperty("messageRole", role)
+        bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        bubble.setMarkdown(body)
+        style_tables(bubble)
         # Qt 样式表不支持 line-height；用块格式加行距，避免正文发紧。
         cursor = QTextCursor(bubble.document())
         cursor.select(QTextCursor.SelectionType.Document)
         block_format = QTextBlockFormat()
         block_format.setLineHeight(145, QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
         cursor.mergeBlockFormat(block_format)
-        bubble.setObjectName("messageBubble")
-        bubble.setProperty("messageRole", role)
-        bubble.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         bubble.document().setTextWidth(self._bubble_width())
         bubble.setFixedHeight(self._bubble_height(bubble))
-        block.addWidget(bubble)
-        if diagram_codes:
-            if not bubble_text.strip():
-                bubble.hide()
-            for code in diagram_codes[:2]:
-                block.addWidget(DiagramView(code))
-        return [container]
+        return bubble
+
+    def _answer_choice(self, key, text):
+        self._answered_choices.add(key)
+        self._use_suggestion(text)
 
     def _render_messages(self, messages):
         self._switch_to_transcript_view()
+        self.end_answer()
         self.reasoning_panel = None
         clear_layout(self.transcript_layout)
-        latest_code = ""
         for message in messages:
             for widget in self._message_widgets(message):
                 self.transcript_layout.addWidget(widget)
                 widget.show()
-            if message.get("role") == "assistant":
-                codes = extract_mermaid_blocks(message.get("content") or "")
-                if codes:
-                    latest_code = codes[-1]
         self._rendered_count = len(messages)
         self._scroll_chat_bottom(force=True)
+        self._schedule_fit()
         if self.motion_enabled:
             fade_in(self.transcript, True)
-        if latest_code:
-            self.canvas_panel.show_diagram(latest_code)
 
     def show_chat_error(self, message):
         messages = list(getattr(self, "_pending_messages", []))
@@ -1344,6 +1639,30 @@ class SafeMessageBrowser(QTextBrowser):
     def loadResource(self, resource_type, name):
         # Model text may contain image URLs; it is not permission to fetch files.
         return None
+
+
+def table_markup(html: str) -> str:
+    """给 Markdown 表格的 table/td/th 补边框与表头底色（纯字符串变换）。"""
+    if "<table" not in html:
+        return html
+    border = color("border")
+    header = color("subtle")
+    html = re.sub(r"<table\b",
+                  f'<table border="1" cellspacing="0" cellpadding="6" '
+                  f'style="border-collapse:collapse; border:1px solid {border};"', html)
+    html = re.sub(r"<td\b", f'<td style="border:1px solid {border}; padding:6px 10px;"', html)
+    html = re.sub(r"<th\b",
+                  f'<th style="border:1px solid {border}; padding:6px 10px; '
+                  f'background-color:{header};"', html)
+    return html
+
+
+def style_tables(browser) -> None:
+    """渲染前给表格补样式（Qt 默认表格无边框，在对话里很难读）。"""
+    html = browser.toHtml()
+    styled = table_markup(html)
+    if styled != html:
+        browser.setHtml(styled)
 
 
 def try_system_toggle(window) -> bool:

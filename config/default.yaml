@@ -307,7 +307,8 @@ web:
 # 团队成员的 web_search 工具用它查实时信息。
 # 默认自动模式：留空即可——有 DeepSeek Key 时自动用 DeepSeek 服务端搜索
 # （搜索在 DeepSeek 服务器执行，按量计费，无需另申请搜索 Key）。
-# 想换第三方：provider 支持 tavily（海外，英文/学术好）与 bocha（国内，中文好），
+# 想换第三方：provider 支持 deepseek_api（DeepSeek 搜索接口原始结果，带日期/权威度）、
+# tavily（海外，英文/学术好）与 bocha（国内，中文好），
 # 此时把 Key 放 config/local.yaml（不进版本库）：
 #   search:
 #     provider: bocha

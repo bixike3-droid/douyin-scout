@@ -20,6 +20,8 @@ from pathlib import Path
 MERMAID_BLOCK_RE = re.compile(r"```mermaid[ \t]*\n(.*?)```", re.S)
 KROKI_TIMEOUT = 30
 RENDER_TIMEOUT_MS = 25000
+# 渲染结果变化时递增：旧的宽画布缓存自动失效，不要手工清目录。
+RENDER_VERSION = 2
 
 
 def extract_mermaid_blocks(text: str) -> list[str]:
@@ -31,6 +33,28 @@ def strip_mermaid_blocks(text: str) -> str:
     """去掉 mermaid 代码块后的正文（图表由独立控件展示，不留在气泡里）。"""
     cleaned = MERMAID_BLOCK_RE.sub("", text or "")
     return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def split_mermaid_blocks(text: str) -> list[tuple[str, str]]:
+    """把正文切成 [("text", 正文), ("mermaid", 图), ...]。
+
+    图要留在它原来的位置：附件式“统统一到最后”会让图和后面那几段文字看起来
+    挤在一起，读者也分不清图属于哪一节。
+    """
+    parts: list[tuple[str, str]] = []
+    position = 0
+    for match in MERMAID_BLOCK_RE.finditer(text or ""):
+        before = (text or "")[position:match.start()]
+        if before.strip():
+            parts.append(("text", before))
+        code = match.group(1).strip()
+        if code:
+            parts.append(("mermaid", code))
+        position = match.end()
+    rest = (text or "")[position:]
+    if rest.strip():
+        parts.append(("text", rest))
+    return parts
 
 
 def cache_dir() -> Path:
@@ -60,7 +84,8 @@ def _render_local(code: str) -> bytes:
     mermaid_js = asset_path("mermaid.min.js").read_text(encoding="utf-8")
     escaped = html_lib.escape(code)
     page_html = f"""<!doctype html><html><head><meta charset="utf-8">
-<style>html,body{{margin:0;padding:0;background:#ffffff}} pre.mermaid{{margin:0;padding:0;font-size:16px}}</style>
+<style>html,body{{margin:0;padding:0;background:#ffffff}}
+pre.mermaid{{margin:0;padding:10px;font-size:16px;display:inline-block;text-align:center}}</style>
 </head><body><pre class="mermaid" id="diagram">{escaped}</pre>
 <script>{mermaid_js}</script>
 <script>
@@ -71,6 +96,16 @@ window.__done = false; window.__err = null;
     if (!mermaid) throw new Error("mermaid 资源未加载");
     mermaid.initialize({{ startOnLoad: false, theme: "default", securityLevel: "strict" }});
     await mermaid.run({{ nodes: document.querySelectorAll(".mermaid") }});
+    // 默认 SVG 宽度是 100%，会把图拉成整页宽、内容挤在左边；
+    // 改成按 viewBox 的原始尺寸，截图就只包住图本身。
+    for (const svg of document.querySelectorAll("pre.mermaid svg")) {{
+      const box = svg.viewBox && svg.viewBox.baseVal;
+      if (box && box.width > 0 && box.height > 0) {{
+        svg.setAttribute("width", box.width);
+        svg.setAttribute("height", box.height);
+        svg.style.maxWidth = "none";
+      }}
+    }}
     window.__done = true;
   }} catch (err) {{ window.__err = String(err); }}
 }})();
@@ -106,7 +141,7 @@ def render_png(code: str, *, prefer_local: bool = True) -> Path | None:
     code = (code or "").strip()
     if not code:
         return None
-    digest = hashlib.sha1(code.encode("utf-8")).hexdigest()
+    digest = hashlib.sha1(f"v{RENDER_VERSION}|{code}".encode("utf-8")).hexdigest()
     target = cache_dir() / f"{digest}.png"
     if target.is_file() and target.stat().st_size > 0:
         return target

@@ -17,23 +17,61 @@ from ..session.lock import ProfileLock
 from ..session.health import LOGIN_COOKIES
 
 
+# 登录凭据：重新登录时只清这些，设备指纹（UIFID/ttwid/msToken）必须留着。
+SESSION_COOKIES = (
+    "sessionid", "sessionid_ss", "sid_tt", "uid_tt", "uid_tt_ss", "sid_guard",
+    "sid_ucp_v1", "ssid_ucp_v1", "passport_csrf_token", "passport_csrf_token_default",
+    "passport_auth_mix_state", "passport_assist_user", "passport_mfa_token",
+    "session_tlb_tag", "d_ticket", "lt", "login_time", "is_staff_user",
+    "x_tt_token", "web_sign_token", "has_biz_token", "fg_uid", "n_mh",
+)
+
+
+async def clear_login_cookies(context):
+    """退出当前抖音登录，但保留设备指纹。
+
+    把 UIFID 一起清掉会让接口马上被判风控：实测 `/aweme/v1/web/aweme/post/`
+    直接返回「Blocked by ArgusSecurityPlugin Uifid Not Found」，要等页面重新
+    种上设备 cookie 才能恢复。所以这里逐个按名字清登录凭据。
+    """
+    for name in SESSION_COOKIES:
+        try:
+            await context.clear_cookies(name=name)
+        except TypeError:          # 老版本 Playwright 不支持按名字清
+            cookies = await context.cookies()
+            keep = [c for c in cookies if c.get("name") not in SESSION_COOKIES]
+            await context.clear_cookies()
+            if keep:
+                await context.add_cookies(keep)
+            return
+
+
 def login_status(paths):
     cfg = load_config(paths)
     tier = next((t.name for t in cfg.tiers.values() if t.enabled and t.mode == "logged_in"), None)
     state = paths.state_dir / f"tier_{tier}_storage.json" if tier else None
     saved = False
+    present: list[str] = []
     if state and state.is_file():
         try:
             data = json.loads(state.read_text(encoding="utf-8"))
             cookies = data.get("cookies", []) if isinstance(data, dict) else []
-            saved = any(c.get("name") in LOGIN_COOKIES
-                        and (c.get("domain") or "").lstrip(".") in ("douyin.com", "www.douyin.com")
-                        and (float(c.get("expires", -1)) < 0 or float(c.get("expires", -1)) > time.time())
-                        for c in cookies)
+            valid = [c for c in cookies
+                     if (c.get("domain") or "").lstrip(".") in ("douyin.com", "www.douyin.com")
+                     and (float(c.get("expires", -1)) < 0 or float(c.get("expires", -1)) > time.time())]
+            # 只记名字、不记值：字段清单用于诊断，不能把凭据漏到界面/日志里。
+            present = sorted({str(c.get("name") or "") for c in valid if c.get("name")})
+            # 只有 sessionid 能证明拿到的是登录态；缺它再多其它 cookie 都只是游客。
+            saved = "sessionid" in present
         except (ValueError, TypeError, OSError):
-            pass
-    return {"saved": saved, "tier": tier,
-            "message": "已保存登录态，使用前会验证" if saved else "请登录抖音后开始采集"}
+            present = []
+    if saved:
+        message = "已保存登录态，使用前会验证"
+    elif present:
+        message = "登录态缺少 sessionid，请重新登录"
+    else:
+        message = "请登录抖音后开始采集"
+    return {"saved": saved, "tier": tier, "cookies": present, "message": message}
 
 
 async def probe_identity(page):
@@ -46,18 +84,24 @@ async def probe_identity(page):
     }""", API_URL), timeout=12)
 
 
-def save_identity(ctx, payload):
+def save_identity(ctx, payload, *, allow_switch=False):
     uid = (payload.get("user") or {}).get("sec_uid")
     if not uid:
         raise ValueError("未能确认抖音账号")
     previous = ctx.cursors.get("self_sec_uid")
-    if previous and previous != uid:
+    switched = bool(previous) and previous != uid
+    if switched and not allow_switch:
         raise ValueError("当前数据属于另一抖音账号，请使用独立的数据目录登录，避免混合账号数据")
     body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     raw = ctx.archive.save(body, url=API_URL, tier="a", content_type="application/json", source="login")
     parsed = parse_payload(API_URL, payload, raw_blob_id=raw.id)
     with ctx.db.transaction():
+        if switched:
+            # 换了账号：旧账号的作品不能再算「本人作品」，否则概览会混着两个号
+            ctx.db.execute("UPDATE works SET is_mine=0 WHERE is_mine=1")
         SelfCollector(ctx).persist(parsed, {})
+    if switched:
+        ctx.db.log_event("warning", "login", f"抖音账号已切换：{previous} → {uid}")
     return (payload.get("user") or {}).get("nickname") or "你的抖音账号"
 
 
@@ -79,6 +123,9 @@ async def login(ctx, emit, *, timeout=300, poll_interval=2):
     tier = next((t for t in ctx.config.tiers.values() if t.enabled and t.mode == "logged_in"), None)
     if tier is None:
         raise ValueError("没有启用登录账号，请检查配置")
+    # 登录入口一律先清掉浏览器里的旧 cookie：profile 是持久化的，不清的话
+    # 已登录的旧账号会立刻通过身份探测，用户根本没机会扫另一个号。
+    previous_login = bool(login_status(ctx.paths)["saved"])
     emit({"message": "正在打开登录浏览器…"})
     with ProfileLock(tier.resolved_profile_dir(ctx.paths)):
         async with async_playwright() as playwright:
@@ -90,8 +137,12 @@ async def login(ctx, emit, *, timeout=300, poll_interval=2):
             )
             try:
                 page = context.pages[0] if context.pages else await context.new_page()
+                await clear_login_cookies(context)
+                if previous_login:
+                    emit({"message": "已退出上一次的抖音登录，请在浏览器中扫码登录（可换账号）…"})
+                else:
+                    emit({"message": "请在打开的浏览器中点击登录并扫码；出现验证码时可直接操作。登录成功后会自动返回。"})
                 await page.goto(ctx.config.targets.home_url, wait_until="domcontentloaded", timeout=45000)
-                emit({"message": "请在打开的浏览器中点击登录并扫码；出现验证码时可直接操作。登录成功后会自动返回。"})
                 deadline = time.monotonic() + timeout
                 last_probe = 0.0
                 last_cookies = None
@@ -113,12 +164,14 @@ async def login(ctx, emit, *, timeout=300, poll_interval=2):
                     if payload:
                         previous = ctx.cursors.get("self_sec_uid")
                         uid = payload["user"]["sec_uid"]
-                        if previous and previous != uid:
-                            raise ValueError("当前数据属于另一抖音账号，请使用独立的数据目录登录")
                         await export_state(context, ctx.paths.state_dir / f"tier_{tier.name}_storage.json")
-                        nickname = save_identity(ctx, payload)
-                        ctx.db.log_event("info", "login", f"桌面登录成功：{nickname}")
-                        return {"message": f"登录成功：{nickname}", "nickname": nickname}
+                        nickname = save_identity(ctx, payload, allow_switch=True)
+                        switched = bool(previous) and previous != uid
+                        ctx.db.log_event("info", "login",
+                                         f"桌面登录成功：{nickname}" + (f"（原账号 {previous}）" if switched else ""))
+                        message = (f"已切换账号：{nickname}（旧账号作品不再计入本人作品）" if switched
+                                   else f"登录成功：{nickname}")
+                        return {"message": message, "nickname": nickname, "switched": switched}
                     await asyncio.sleep(poll_interval)
                 raise TimeoutError("登录超时，请重新点击登录并完成扫码")
             finally:
@@ -261,54 +314,14 @@ async def check_benchmarks(ctx, emit, options):
 
 async def collect_comments(ctx, emit, options):
     """采集单条作品的评论区：登录态 + 抽样预算 + 幂等入库。"""
-    from ..collect.comments import CommentsCollector
-    from ..store.collection import CollectionQueue
+    from ..collect.comments_run import collect_for_work
 
     if not login_status(ctx.paths)["saved"]:
         raise ValueError("请先点击窗口顶部的「登录抖音」")
-    aweme_id = str(options.get("aweme_id") or "")
-    if not aweme_id:
-        raise ValueError("缺少作品标识")
-    work = ctx.works.get(aweme_id) or {}
-    if not work:
-        raise ValueError("本地没有这条作品的记录，请先采集作品")
-    tier = next((t.name for t in ctx.config.tiers.values() if t.enabled and t.mode == "logged_in"), None)
-    if not tier:
-        raise ValueError("没有启用登录账号")
-    tiers = dict(ctx.config.tiers)
-    tiers[tier] = replace(tiers[tier], use_storage_state=True)
-    ctx.config = replace(ctx.config, tiers=tiers, browser=replace(ctx.config.browser, cdp_url=""))
-    title = str(work.get("description") or aweme_id)[:20]
-    emit({"message": f"正在采集评论区（{title}）…"})
-    queue = CollectionQueue(ctx)
-    task = queue.claim("fetch_comments", aweme_id, tier)
-    if task is None:
-        raise ValueError("这条作品的评论任务正在运行或退避中，请稍后再试")
-    collector = CommentsCollector(ctx)
-    collector.on_progress = emit
-    try:
-        outcome = await collector.run({**task, "_api_cadence": True, "_resume": True,
-                                       "_hint": str(work.get("comment_count") or "")})
-    except asyncio.CancelledError:
-        queue.release(task)
-        raise
-    error = str(outcome.error or "")
-    if outcome.ok:
-        ctx.tasks.complete(task["id"])
-    elif outcome.blocked:
-        queue.release(task)
-        raise ValueError(f"采集受阻：{error}")
-    else:
-        if error.startswith("达到页数上限"):
-            queue.release(task)
-        else:
-            ctx.tasks.fail(task["id"], error, retry=True)
-        raise ValueError(f"评论采集未完成：{error[:120]}")
-    total = ctx.comments.count_for_work(aweme_id)
-    state = outcome.persisted.get("collection_state")
-    note = {"sampled": "（按抽样预算采集）", "full": "（已触底）"}.get(state, "")
-    return {"message": f"评论区采集完成：本作品已采 {total} 条评论{note}",
-            "report": {"aweme_id": aweme_id, "items": total, "state": state}}
+    result = await collect_for_work(ctx, emit, (options or {}).get("aweme_id"))
+    note = {"sampled": "（按抽样预算采集）", "full": "（已触底）"}.get(result["state"], "")
+    return {"message": f"评论区采集完成：本作品已采 {result['items']} 条评论{note}",
+            "report": {"aweme_id": result["aweme_id"], "items": result["items"], "state": result["state"]}}
 
 
 async def execute(paths, kind, emit, options=None):
