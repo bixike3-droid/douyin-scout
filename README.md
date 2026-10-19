@@ -90,11 +90,13 @@ brand/           品牌源文件（SVG / PNG）
 
 ## 许可
 
-本项目自身代码以 **MIT** 许可发布，见 [LICENSE](LICENSE)。
+本项目整体以 **GNU GPL v3.0** 发布，见 [LICENSE](LICENSE)（原因是运行时分发依赖的
+PySide6-Fluent-Widgets 采用 GPL-3.0）。要点：
 
-第三方组件（PySide6、PySide6-Fluent-Widgets、Playwright 等）按各自许可发布。请注意
-**PySide6-Fluent-Widgets 是 GPL-3.0**：分发打包好的 exe 时，该产物需要同时满足 GPL-3.0 的要求。
-完整说明见 [THIRD_PARTY.md](THIRD_PARTY.md)。
+- 可以自由使用、修改、商用、再分发，但**分发时必须提供完整对应源代码**（本仓库即源码）
+- 不得对分发的产物附加额外限制（禁止再分发、仅限个人使用之类）
+- `brand/` 下的名称与标志是商标，不在 GPL 授权范围内，二次开发请改名换图
+- 第三方组件与许可明细、以及 Qt 的 LGPL 注意事项见 [THIRD_PARTY.md](THIRD_PARTY.md)
 
 ## 产品主页
 
