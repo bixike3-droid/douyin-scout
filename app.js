@@ -172,6 +172,8 @@
   const versionNode = document.getElementById("verStable");
   const downloadButton = document.getElementById("dlStable");
   const REPO = "bixike3-droid/douyin-scout";
+  // 自建域名上的下载目录：把打包好的 zip 放这里即可，改一行就能换渠道
+  const DOWNLOAD_BASE = "https://douyin.baodaoxiaoyuan.cn/download/";
 
   async function loadLatest() {
     if (!versionNode) return;
@@ -194,7 +196,11 @@
     }
   }
 
-  if (location.protocol === "file:") {
+  if (DOWNLOAD_BASE) {
+    // 自建下载渠道优先：包里只有一个文件，链接固定，不依赖 GitHub API
+    if (downloadButton) downloadButton.href = DOWNLOAD_BASE + "yuanjing-latest.zip";
+    if (versionNode) versionNode.textContent = "Windows · 解压即用";
+  } else if (location.protocol === "file:") {
     if (versionNode) versionNode.textContent = "最新版本请见 Releases";
   } else {
     loadLatest();
