@@ -220,10 +220,13 @@ class Works:
         for col in (
             "author_sec_uid", "description", "create_time", "duration_ms", "digg_count",
             "comment_count", "share_count", "collect_count", "play_count", "music_title",
-            "cover_url", "share_url", "is_top", "is_mine",
+            "cover_url", "share_url", "play_url", "play_url_expires", "media_type",
+            "is_top", "is_mine",
         ):
             if record.get(col) is not None:
                 fields[col] = record[col]
+        if record.get("images") is not None:
+            fields["images_json"] = dumps(record["images"])
         if record.get("hashtags") is not None:
             fields["hashtags_json"] = dumps(record["hashtags"])
         if raw_blob_id is not None:

@@ -38,6 +38,11 @@ def apply_theme(app, mode="light", backdrop=False):
         palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(color("disabled", mode)))
     app.setPalette(palette)
     app.setStyleSheet(style_sheet(mode, backdrop))
+    try:
+        from .controls import sync_theme
+        sync_theme(mode)
+    except Exception:      # noqa: BLE001 —— 未安装 Fluent 时不影响主界面
+        pass
     for widget in app.allWidgets():
         glyph = widget.property("themeGlyph")
         if glyph:
@@ -47,6 +52,16 @@ def apply_theme(app, mode="light", backdrop=False):
         if agent_glyph:
             size = widget.property("agentGlyphSize") or 20
             widget.setPixmap(agent_badge(None, agent_glyph, size).pixmap(size, size))
+        fluent_glyph = widget.property("fluentGlyph")
+        if fluent_glyph:
+            try:
+                from .controls import fluent_icon
+                shade = widget.property("fluentGlyphColor")
+                fresh = fluent_icon(str(fluent_glyph), str(shade) if shade else None)
+                if fresh is not None:
+                    widget.setIcon(fresh)
+            except Exception:      # noqa: BLE001 —— 图标刷新失败不影响主题切换
+                pass
         QWidget.update(widget)
     return mode
 

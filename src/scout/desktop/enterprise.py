@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, Q
     QPlainTextEdit, QPushButton, QCheckBox, QComboBox, QTabWidget, QScrollArea, QSplitter,
     QFileDialog, QMessageBox)
 from .components import card, text
+from .controls import ComboBox
 from ..analyze.enterprise import render_output, export_report
 from ..store.enterprise import METRICS
 from ..util import local_tz, parse_iso
@@ -68,7 +69,7 @@ class EnterprisePage(QWidget):
             grid.addWidget(field, index, 1)
         grid.setColumnStretch(1, 1)
         layout.addLayout(grid)
-        self.feedback_report = QComboBox()
+        self.feedback_report = ComboBox()
         self.feedback_report.addItem("记录执行反馈时，请选择对应报告", None)
         self.feedback_report.currentIndexChanged.connect(self._profile_changed)
         layout.addWidget(self.feedback_report)
@@ -112,7 +113,7 @@ class EnterprisePage(QWidget):
         pane = QWidget()
         layout = QVBoxLayout(pane)
         row = QHBoxLayout()
-        self.report_select = QComboBox()
+        self.report_select = ComboBox()
         self.report_select.setMinimumWidth(240)
         self.report_select.currentIndexChanged.connect(self._select_report)
         row.addWidget(self.report_select, 1)
@@ -218,7 +219,7 @@ class EnterprisePage(QWidget):
         body = QWidget()
         layout = QVBoxLayout(body)
         layout.addWidget(text("接口缺少播放量时，可按后台真实数据补录。仅补录当前账号已有的本人作品；留空表示未知，0表示真实为零。", "muted"))
-        self.work_select = QComboBox()
+        self.work_select = ComboBox()
         layout.addWidget(self.work_select)
         grid = QGridLayout()
         self.metric_fields = {}

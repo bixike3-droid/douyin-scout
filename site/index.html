@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>源镜 · 传播工作台 — 一支懂抖音的 AI 团队</title>
+<meta name="description" content="源镜是一支本地运行的抖音 AI 团队：总管接单、数据管家取数、分析师看表现、策略师出选题。七个角色分工干活，数据只留在你自己的电脑里。" />
+<link rel="stylesheet" href="style.css" />
+<link rel="icon" href="assets/app-icon.svg" type="image/svg+xml" />
+</head>
+<body>
+<div class="glow glow-a"></div>
+<div class="glow glow-b"></div>
+
+<header class="nav" id="nav">
+  <a class="brand" href="#top">
+    <img class="mark" src="assets/logo-mark.svg" alt="源镜 logo" width="32" height="32" />
+    <span class="brand-text">源镜<em>传播工作台</em></span>
+  </a>
+  <nav class="nav-links">
+    <a href="#team">AI 团队</a>
+    <a href="#how">怎么用</a>
+    <a href="#capability">能力</a>
+    <a href="#matrix">功能清单</a>
+    <a href="#download">下载</a>
+    <a href="#faq">常见问题</a>
+  </nav>
+  <div class="nav-actions">
+    <button class="icon-btn" id="themeToggle" title="切换明暗" aria-label="切换明暗">
+      <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 3a9 9 0 1 0 9 9 7 7 0 0 1-9-9Z" fill="currentColor"/></svg>
+    </button>
+    <a class="btn btn-primary btn-sm" href="#download">立即下载</a>
+  </div>
+</header>
+
+<main id="top">
+  <section class="hero">
+    <p class="eyebrow reveal">LOCAL-FIRST · 抖音 AI 团队工作台</p>
+    <h1 class="reveal">把「该发什么」<br />交给一支会分工的 AI 团队。</h1>
+    <p class="lede reveal">
+      源镜不是一个只会聊天的助手。你说清楚要什么，总管接单、数据管家取数、受众与内容分析师读数据、
+      热点观察员盯榜单、策略师给方向、复盘顾问收口——每一步都有依据，数据只留在你自己的电脑里。
+    </p>
+    <div class="hero-actions reveal">
+      <a class="btn btn-primary" href="#download">立即下载</a>
+      <a class="btn btn-ghost" href="#team">认识七位同事</a>
+    </div>
+    <p class="meta reveal">Windows · 免安装 · 七位角色分工 · 本地数据可复核</p>
+
+    <div class="deck-wrap reveal" id="heroCarousel">
+      <div class="hero-deck" id="heroDeck">
+        <figure class="deck-card" data-index="0" data-pos="center">
+          <img src="assets/screen-agent.png" alt="AI 团队对话" />
+        </figure>
+        <figure class="deck-card" data-index="1" data-pos="right">
+          <img src="assets/screen-overview.png" alt="数据概览" />
+        </figure>
+        <figure class="deck-card" data-index="2" data-pos="left">
+          <img src="assets/screen-works.png" alt="作品数据" />
+        </figure>
+      </div>
+      <div class="deck-bar">
+        <button class="arrow" id="carouselPrev" aria-label="上一张">‹</button>
+        <div class="dots" id="carouselDots">
+          <button class="dot is-active" data-index="0" aria-label="第 1 张"></button>
+          <button class="dot" data-index="1" aria-label="第 2 张"></button>
+          <button class="dot" data-index="2" aria-label="第 3 张"></button>
+        </div>
+        <button class="arrow" id="carouselNext" aria-label="下一张">›</button>
+      </div>
+      <p class="deck-caption" id="carouselCaption">
+        同一个问题：内容分析师先读数据，传播策略师再给方向；右侧抖音热点同时带 AI 可用性判定
+      </p>
+    </div>
+
+  </section>
+
+  <section class="stats reveal">
+    <div class="stat"><b>7</b><span>个分工明确的角色</span></div>
+    <div class="stat"><b>100%</b><span>本地运行，不上传</span></div>
+    <div class="stat"><b>51</b><span>条热榜实时评估</span></div>
+    <div class="stat"><b>0</b><span>云端存档</span></div>
+  </section>
+
+  <section class="section" id="team">
+    <h2 class="section-title reveal">七位同事，各管一摊</h2>
+    <p class="section-sub reveal">不是换了个名字的单一体：每个人有独立的人设、可调用的工具和交付物。</p>
+    <div class="agents">
+      <article class="agent reveal" style="--agent:#AF8FFF">
+        <span class="dot"></span>
+        <h3>源镜 <em>总管</em></h3>
+        <p>接单派活。能回答就直接答，需要取数或分析时把活交给对应的同事。</p>
+      </article>
+      <article class="agent reveal" style="--agent:#5CB2F0">
+        <span class="dot"></span>
+        <h3>数据管家 <em>取数</em></h3>
+        <p>登录、取点赞人与公开资料、洗库并汇报结果；不做内容判断。</p>
+      </article>
+      <article class="agent reveal" style="--agent:#4FC6A6">
+        <span class="dot"></span>
+        <h3>受众分析师 <em>画像</em></h3>
+        <p>谁在点赞、他们是什么样的人、和内容有多契合，都基于已采集的数据。</p>
+      </article>
+      <article class="agent reveal" style="--agent:#F0B45C">
+        <span class="dot"></span>
+        <h3>内容分析师 <em>诊断</em></h3>
+        <p>播放、互动、题材与发布节奏的规律，只依据真实指标说话。</p>
+      </article>
+      <article class="agent reveal" style="--agent:#FF7A45">
+        <span class="dot"></span>
+        <h3>热点观察员 <em>时机</em></h3>
+        <p>盯抖音热榜，标注「可用 / 参考 / 不建议」，无关热点直说不建议硬蹭。</p>
+      </article>
+      <article class="agent reveal" style="--agent:#E77BC1">
+        <span class="dot"></span>
+        <h3>传播策略师 <em>选题</em></h3>
+        <p>把结论落成可执行的选题与节奏，并区分事实、推论与待确认信息。</p>
+      </article>
+      <article class="agent reveal" style="--agent:#8D9FF0">
+        <span class="dot"></span>
+        <h3>复盘顾问 <em>收口</em></h3>
+        <p>整理报告、对比历史方案与实际表现，把执行结果说清楚。</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="how">
+    <h2 class="section-title reveal">你只需要把话说清楚</h2>
+    <p class="section-sub reveal">不需要学命令、不需要写提示词，像跟同事说话一样。</p>
+    <div class="steps">
+      <div class="step reveal">
+        <span class="step-no">01</span>
+        <h3>说需求</h3>
+        <p>「这周该发什么」「谁在点赞我的视频」——团队自己判断该谁上，不用你点菜单。</p>
+      </div>
+      <div class="step reveal">
+        <span class="step-no">02</span>
+        <h3>他们带着工具干活</h3>
+        <p>取数、拉热榜、查指标、读评论都在本地完成；缺数据会直说缺什么，不编数字。</p>
+      </div>
+      <div class="step reveal">
+        <span class="step-no">03</span>
+        <h3>拿到能执行的动作</h3>
+        <p>选题、节奏、待确认项一起给；不满意可以继续追问，或让复盘顾问整理成报告。</p>
+      </div>
+    </div>
+
+    <div class="quote reveal">
+      <p class="quote-q">「这周想发点东西，帮我看看该做哪个方向？」</p>
+      <div class="quote-a">
+        <span class="quote-who">内容分析师</span>
+        <p>跑腿流程类完播最高（平均播放 6,800，点赞率 3.1%），价格类互动最高，雨天的收藏更高但发布太少——问题不是发什么，而是把已经在动的三个题材做成系列。</p>
+      </div>
+      <div class="quote-a">
+        <span class="quote-who">传播策略师</span>
+        <p>给了三个方向：《跑腿价目表》《15 分钟路线》《雨天备选方案》，建议一周两条主系列 + 一条场景题，并标注了「雨天能否稳定出片」这个待确认项。</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-dark" id="capability">
+    <h2 class="section-title reveal">团队背后，是能查证的数据</h2>
+    <p class="section-sub reveal">AI 说的话有出处：任务记录、原始响应、质量检查都留在本地。</p>
+    <div class="cards cards-2">
+      <article class="card card-shot reveal">
+        <div class="card-copy">
+          <h3>工具直连本地数据</h3>
+          <p>作品、指标、评论区、互动者、热榜都由团队调本地工具取回；碰到风控会改用真实浏览器捕获兜底，并标记采集模式。</p>
+        </div>
+        <img src="assets/screen-works.png" alt="作品数据页面" loading="lazy" />
+      </article>
+      <article class="card card-shot reveal">
+        <div class="card-copy">
+          <h3>每一步都能复查</h3>
+          <p>任务状态、失败原因、质量检查结论都留痕；统计异常和待核验关联会被标出来，程序不会悄悄改你的数据。</p>
+        </div>
+        <img src="assets/screen-tasks.png" alt="采集任务页面" loading="lazy" />
+      </article>
+    </div>
+    <figure class="shot dark-shot reveal">
+      <img src="assets/screen-agent-dark.png" alt="源镜深色界面下的团队对话" loading="lazy" />
+      <figcaption>深色模式：同一场对话，晚上看也不刺眼</figcaption>
+    </figure>
+  </section>
+
+  <section class="section" id="matrix">
+    <h2 class="section-title reveal">详细功能清单</h2>
+    <p class="section-sub reveal">当前版本已支持以下核心能力。</p>
+    <div class="table-wrap reveal">
+      <table>
+        <thead>
+          <tr><th>模块</th><th>说明</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>AI 团队</td><td>七个角色分工协作，按问题自动派活，回复里标明是谁在说话。</td></tr>
+          <tr><td>工具调用</td><td>取数、热榜、指标、评论、报告都由团队调用本地工具完成，结果可回溯。</td></tr>
+          <tr><td>热点评估</td><td>抓抖音热榜并给每条标注「可用 / 参考 / 不建议」和理由，无关热点直说别蹭。</td></tr>
+          <tr><td>对话式分析</td><td>结论可以继续追问深挖；不满意可重新生成，历史版本保留。</td></tr>
+          <tr><td>报告与计划</td><td>传播诊断、内容计划、选题清单可导出，也能人工复核后再生成。</td></tr>
+          <tr><td>抖音数据</td><td>本人作品、播放点赞评论转发、点赞人与评论人、公开资料与作品样本。</td></tr>
+          <tr><td>主页兜底</td><td>接口被风控时改从真实浏览器捕获响应，仍能落库并标记采集模式。</td></tr>
+          <tr><td>视频与图文</td><td>作品可在工作台内直接播放；图文作品支持图片翻页，缓存按容量自动清理。</td></tr>
+          <tr><td>质量检查</td><td>统计异常、待核验关联、资料缺失都会被标出来，不悄悄改数据。</td></tr>
+          <tr><td>本地优先</td><td>数据落在本机数据库；是否使用在线模型由你决定，Key 也只存本地。</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="section" id="download">
+    <h2 class="section-title reveal">探索，从这里开始</h2>
+    <p class="section-sub reveal">原生 Windows 桌面程序，解压即用，不需要安装运行库。</p>
+    <div class="cards cards-3">
+      <article class="card dl reveal">
+        <span class="tag">稳定版</span>
+        <p class="dl-ver" id="verStable">正在读取版本…</p>
+        <a class="btn btn-primary" id="dlStable" href="https://github.com/bixike3-droid/douyin-scout/releases" target="_blank" rel="noopener">下载</a>
+        <p class="dl-note">推荐大多数用户使用</p>
+      </article>
+      <article class="card dl reveal">
+        <span class="tag tag-ghost">源码</span>
+        <p class="dl-ver">GitHub 仓库</p>
+        <a class="btn btn-ghost" href="https://github.com/bixike3-droid/douyin-scout" target="_blank" rel="noopener">查看代码</a>
+        <p class="dl-note">Python + PySide6，可自行构建</p>
+      </article>
+      <article class="card dl reveal">
+        <span class="tag tag-ghost">说明</span>
+        <p class="dl-ver">解压后运行 源镜.exe</p>
+        <a class="btn btn-ghost" href="#faq">常见问题</a>
+        <p class="dl-note">首次启动需要登录抖音</p>
+      </article>
+    </div>
+  </section>
+
+  <section class="section" id="faq">
+    <h2 class="section-title reveal">你想知道的，都在这里</h2>
+    <div class="faq">
+      <details class="reveal">
+        <summary>AI 团队会自己乱编数据吗？</summary>
+        <p>不会。取数、热榜、指标都走本地工具，拿不到就直说拿不到；热榜会区分「热点事实」和「结合建议」，缺少的数据标成待确认，而不是补一个像样的数字。</p>
+      </details>
+      <details class="reveal">
+        <summary>我的数据会被上传吗？</summary>
+        <p>采集、解析、报告生成全部在本机完成。只有你主动使用在线模型生成分析时，才会把需要的企业资料与作品摘要发送给你自己配置的模型服务。</p>
+      </details>
+      <details class="reveal">
+        <summary>可以换成自己的模型吗？</summary>
+        <p>可以。模型与 Key 在设置页填写，只存在本地配置文件里；不同任务可以选择不同模型与思考档位。</p>
+      </details>
+      <details class="reveal">
+        <summary>登录态是怎么保存的？</summary>
+        <p>用本地浏览器配置目录保存抖音登录态，文件只存在你的电脑上。换账号时会清理旧登录凭据，旧账号作品不再计入「我的作品」。</p>
+      </details>
+      <details class="reveal">
+        <summary>采不到数据怎么办？</summary>
+        <p>任务记录里能看到每条任务的状态与最近错误。接口被风控时程序会改用真实浏览器捕获主页响应兜底，并标记采集模式，方便判断这批数据可信到什么程度。</p>
+      </details>
+      <details class="reveal">
+        <summary>缓存的视频和图片会越用越大吗？</summary>
+        <p>不会。只有点了播放才下载，默认上限 500MB，超限按最久未访问删除，7 天未访问的也会清掉；设置页可以改上限或一键清空。</p>
+      </details>
+    </div>
+  </section>
+</main>
+
+<footer class="footer">
+  <div class="footer-brand">
+    <img class="mark" src="assets/logo-mark.svg" alt="源镜 logo" width="28" height="28" />
+    <span>源镜 · 传播工作台</span>
+  </div>
+  <nav class="footer-links">
+    <a href="https://github.com/bixike3-droid/douyin-scout" target="_blank" rel="noopener">GitHub</a>
+    <a href="#matrix">功能清单</a>
+    <a href="#faq">常见问题</a>
+  </nav>
+  <p class="copyright">七位同事已经就位，剩下的交给你。</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

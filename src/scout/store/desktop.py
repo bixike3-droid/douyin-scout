@@ -27,7 +27,7 @@ class DesktopStore:
     def overview(self) -> dict[str, Any]:
         # 注意：query_one 返回 sqlite3.Row（只有下标与 keys()，没有 .get），
         # 调用方（工具 / 界面）习惯按 dict 取字段，这里统一转成 dict。
-        me = self.db.query_one("SELECT u.nickname FROM users u JOIN cursor_state c "
+        me = self.db.query_one("SELECT u.nickname, u.avatar_url, c.cursor AS sec_uid FROM users u JOIN cursor_state c "
                                "ON c.name='self_sec_uid' AND c.cursor=u.sec_uid")
         return {
             "works": self.db.scalar("SELECT COUNT(*) FROM works WHERE is_mine=1", default=0),

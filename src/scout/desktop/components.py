@@ -1,7 +1,7 @@
 """Small native widgets shared by the desktop pages."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QPainter, QPalette
 from PySide6.QtWidgets import QStyle, QStyleOption
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
@@ -48,14 +48,14 @@ def text(value, style="", parent=None):
     return widget
 
 
-def soft_shadow(widget, blur=20, dy=2, alpha=34):
-    """统一的轻投影：卡片用层次感替代重描边。"""
+def soft_shadow(widget, blur=32, dy=8, alpha=28):
+    """统一的层次投影：卡片浮在画布上，靠柔和投影而不是重描边分层。"""
     from PySide6.QtGui import QColor
     from PySide6.QtWidgets import QGraphicsDropShadowEffect
     effect = QGraphicsDropShadowEffect(widget)
     effect.setBlurRadius(blur)
     effect.setOffset(0, dy)
-    shade = QColor(0, 0, 0)
+    shade = QColor(15, 18, 24)
     shade.setAlpha(alpha)
     effect.setColor(shade)
     widget.setGraphicsEffect(effect)
@@ -76,11 +76,14 @@ def card(title="", description=""):
 
 
 class MetricCard(QFrame):
+    clicked = Signal()
+
     def __init__(self, title, note, symbol):
         super().__init__()
         self.setObjectName("card")
         soft_shadow(self)
         self.setMinimumHeight(136)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 16)
         header = QHBoxLayout()
@@ -94,6 +97,53 @@ class MetricCard(QFrame):
         self.value = text("—", "metricValue")
         layout.addWidget(self.value)
         layout.addWidget(text(note, "metricNote"))
+
+    def mouseReleaseEvent(self, event):
+        super().mouseReleaseEvent(event)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+
+
+class AccountAvatar(QLabel):
+    """左下角账号头像：有图用图，没图用首字圆牌。"""
+
+    def __init__(self, size=26, parent=None):
+        super().__init__(parent)
+        self._size = size
+        self._label = ""
+        self._image = None
+        self.setFixedSize(size, size)
+        self.setObjectName("accountAvatar")
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.refresh()
+
+    @property
+    def has_image(self):
+        return self._image is not None
+
+    def set_text(self, value):
+        self._label = (value or "").strip()
+        if self._image is None:
+            self.refresh()
+
+    def set_image(self, path) -> bool:
+        from PySide6.QtGui import QPixmap
+        from .avatar import round_pixmap
+        pixmap = QPixmap(str(path))
+        if pixmap.isNull():
+            return False
+        self._image = round_pixmap(pixmap, self._size)
+        self.setPixmap(self._image)
+        return True
+
+    def refresh(self):
+        """主题切换后占位圆牌要跟着换色。"""
+        if self._image is not None:
+            self.setPixmap(self._image)
+            return
+        from .appearance import color
+        from .avatar import placeholder_pixmap
+        self.setPixmap(placeholder_pixmap(self._label, self._size, color("subtle"), color("muted")))
 
 
 class TaskSummary(QWidget):

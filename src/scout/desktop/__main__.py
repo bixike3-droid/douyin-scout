@@ -55,6 +55,11 @@ def main(default_root: Path | None = None) -> int:
     app.setApplicationDisplayName("源镜")
     app.setOrganizationName("源镜")
     try:
+        from .i18n import install_chinese_ui
+        install_chinese_ui(app)
+    except Exception:      # noqa: BLE001 —— 没有中文包时保留默认文案
+        pass
+    try:
         from PySide6.QtCore import QTimer
         from .runtime import prepare_runtime
         from .service import DesktopService

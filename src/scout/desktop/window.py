@@ -7,18 +7,23 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl, QSize, QEvent, QSettings, Signal
+from PySide6.QtCore import (
+    QAbstractTableModel, QModelIndex, Qt, QTimer, QUrl, QSize, QEvent, QSettings, Signal,
+    QEasingCurve, QPropertyAnimation, QAbstractAnimation,
+)
 from PySide6.QtGui import QAction, QDesktopServices, QColor, QIcon, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QFrame, QGridLayout, QHBoxLayout,
     QLabel, QLineEdit, QListWidget, QMainWindow, QMessageBox, QPlainTextEdit,
     QProgressBar, QPushButton, QSplitter, QStackedWidget, QTableView,
     QVBoxLayout, QWidget, QHeaderView, QListWidgetItem, QScrollArea, QComboBox, QSpinBox, QCheckBox, QSizeGrip, QTabWidget,
+    QGraphicsOpacityEffect,
 )
 
 from .jobs import Jobs
 from ..util import local_tz, parse_iso
-from .components import MetricCard, TaskSummary, ElidedLabel, card, text
+from .branding import app_icon
+from .components import MetricCard, TaskSummary, ElidedLabel, AccountAvatar, card, text
 from .theme import apply_theme, icon
 from .appearance import THEMES, color
 from .operations import Operations
@@ -26,6 +31,8 @@ from .benchmark import BenchmarkPage
 from .harness import HarnessPage, TitleBar
 from .enterprise import report_time
 from .motion import fade_in
+from .controls import ComboBox, switch, notify, state_tip, progress_ring, fluent_icon, smooth_scroll_area
+from .controls import set_fluent_icon, command_bar, bar_action, flyout_show, install_fluent_tooltips
 from .taskbar import TaskbarProgress
 
 LABELS = {
@@ -38,6 +45,14 @@ LABELS = {
 PAGES = [("传播工作台", "enterprise"), ("作品数据", "works"), ("互动者", "users"),
          ("历史分析", "analyses"), ("采集任务", "tasks"), ("对标账号", "benchmark"),
          ("设置", "settings"), ("数据概览", "overview")]
+NAV_ICONS = {"enterprise": "HOME", "works": "VIDEO", "users": "PEOPLE", "analyses": "HISTORY",
+             "tasks": "CLOUD_DOWNLOAD", "benchmark": "MARKET", "settings": "SETTING", "overview": "PIE_SINGLE"}
+METRIC_NOTES = {
+    "works": "统计本地归档的本人作品，按作品标识去重；重复采集只更新指标，不重复计数。",
+    "users": "按用户标识去重；同一个人在不同作品下互动只算一次。",
+    "analyses": "本地已保存的报告数量，包含画像、作品评价和内容计划三类。",
+    "pending": "本地队列里等待执行或重试的任务；执行中的任务不计入。",
+}
 COLUMNS = {
     "works": [("作品标题", "description"), ("播放", "play_count"), ("点赞", "digg_count"), ("评论", "comment_count"),
               ("转发", "share_count"), ("发布时间", "create_time")],
@@ -141,6 +156,7 @@ class RecordsModel(QAbstractTableModel):
 class RecordsPage(QWidget):
     work_selected = Signal(str)
     collect_comments_requested = Signal(str)
+    play_requested = Signal(object)
 
     def __init__(self, key, request, parent=None):
         super().__init__(parent)
@@ -157,13 +173,29 @@ class RecordsPage(QWidget):
         self.search = QLineEdit()
         self.search.setPlaceholderText("搜索名称或标识…")
         self.search.setClearButtonEnabled(True)
+        self._apply_search_icon()
         search_row = QHBoxLayout()
         search_row.addWidget(self.search, 1)
         self.detail_toggle = QPushButton("详情面板")
         self.detail_toggle.setCheckable(True)
         self.detail_toggle.setChecked(True)
-        search_row.addWidget(self.detail_toggle)
+        set_fluent_icon(self.detail_toggle, "LAYOUT")
         layout.addLayout(search_row)
+        # 表格上方操作条：刷新 / 详情面板 / 复制详情（不跳页）
+        self.command_bar = command_bar()
+        self.detail_action = None
+        if self.command_bar is None:
+            search_row.addWidget(self.detail_toggle)      # 没有 Fluent 时退回普通按钮
+        else:
+            layout.addWidget(self.command_bar)
+            bar_action(self.command_bar, "SYNC", "刷新", request)
+            self.detail_action = bar_action(self.command_bar, "LAYOUT", "详情面板",
+                                           self.detail_toggle.setChecked, checkable=True, checked=True)
+            if self.detail_action is not None:
+                self.detail_toggle.toggled.connect(self.detail_action.setChecked)
+            bar_action(self.command_bar, "COPY", "复制详情", self._copy_detail)
+            if self.key == "works":
+                bar_action(self.command_bar, "PLAY", "聊天窗播放", self._play_selected)
         self.model = RecordsModel(COLUMNS[key], self)
         self.table = QTableView()
         self.table.setModel(self.model)
@@ -202,6 +234,7 @@ class RecordsPage(QWidget):
         self.comments_button = QPushButton("采集评论区")
         self.comments_button.setToolTip("按抽样预算采集这条作品的评论区（需登录态）")
         self.comments_button.setVisible(False)
+        set_fluent_icon(self.comments_button, "CHAT")
         self.comments_button.clicked.connect(self._collect_comments)
         detail_layout.addWidget(self.comments_button)
         self.detail_toggle.toggled.connect(detail_card.setVisible)
@@ -218,6 +251,8 @@ class RecordsPage(QWidget):
         self.count.setObjectName("muted")
         self.previous = QPushButton("上一页")
         self.next = QPushButton("下一页")
+        set_fluent_icon(self.previous, "LEFT_ARROW")
+        set_fluent_icon(self.next, "RIGHT_ARROW")
         self.previous.setEnabled(False)
         self.next.setEnabled(False)
         controls.addWidget(self.count, 1)
@@ -237,6 +272,29 @@ class RecordsPage(QWidget):
         self.page = 0
         self.table.scrollToTop()
         self.timer.start()
+
+    def _apply_search_icon(self):
+        """搜索框的放大镜图标；切主题时重取一次，深色下才不会看不见。"""
+        for action in list(self.search.actions()):
+            if action.property("scoutSearchIcon"):
+                self.search.removeAction(action)
+        fresh = fluent_icon("SEARCH")
+        if fresh is not None:
+            item = self.search.addAction(fresh, QLineEdit.ActionPosition.LeadingPosition)
+            item.setProperty("scoutSearchIcon", True)
+
+    def _copy_detail(self):
+        content = self.detail.toPlainText()
+        if content:
+            QApplication.clipboard().setText(content)
+
+    def _play_selected(self):
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            return
+        record = dict(self.model.rows[selected[0].row()])
+        if str(record.get("aweme_id") or ""):
+            self.play_requested.emit(record)
 
     def eventFilter(self, watched, event):
         if watched is self.table.viewport() and event.type() == QEvent.Type.Resize:
@@ -367,6 +425,10 @@ class MainWindow(QMainWindow):
         # winapi.apply_backdrop 保留，待找到不破坏输入链路的方案后再接回（默认关）。
         self._backdrop_enabled = False
         apply_theme(QApplication.instance(), self.appearance_mode, self._backdrop_enabled)
+        from .cursors import install_pointer_cursors
+        install_pointer_cursors(QApplication.instance())
+        self._theme_overlay = None
+        self._theme_animation = None
         try:
             QApplication.instance().styleHints().colorSchemeChanged.connect(self._system_scheme_changed)
         except Exception:
@@ -378,10 +440,16 @@ class MainWindow(QMainWindow):
         self._recent_fingerprint = None
         self.setWindowTitle("源镜 · 传播工作台")
         self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
-        self.setWindowIcon(icon("sparkles", size=32))
+        self.setWindowIcon(app_icon())
         self.resize(1480, 960)
         self.setMinimumSize(1060, 720)
         self.jobs = Jobs(self)
+        self.avatar_jobs = Jobs(self)
+        self.avatar_jobs.succeeded.connect(self._avatar_ready)
+        self.media_jobs = Jobs(self)
+        self.media_jobs.succeeded.connect(self._video_ready)
+        self.image_jobs = Jobs(self)
+        self.image_jobs.succeeded.connect(self._images_ready)
         self.jobs.succeeded.connect(self._result)
         self.jobs.failed.connect(self._error)
         self.jobs.busy_changed.connect(self._busy)
@@ -394,6 +462,7 @@ class MainWindow(QMainWindow):
         self.has_key = False
         self.enterprise_report_id = None
         self.conversation_to_load = None
+        self.state_tip = None
         self.start_enterprise_after_save = None
         self.motion_enabled = self.ui_preferences.value("motionEnabled", True, type=bool)
         # 首次使用（未显式设置过）时，动效默认跟随系统「窗口动画」开关。
@@ -448,7 +517,8 @@ class MainWindow(QMainWindow):
         folder_button = QPushButton()
         folder_button.setObjectName("toolbarButton")
         folder_button.setFixedSize(32, 32)
-        folder_button.setIcon(icon("folder", size=18))
+        folder_button.setProperty("fluentGlyph", "FOLDER")
+        folder_button.setIcon(fluent_icon("FOLDER") or icon("folder", size=18))
         folder_button.setToolTip("打开数据目录")
         folder_button.setAccessibleName("打开数据目录")
         folder_button.clicked.connect(folder.trigger)
@@ -456,14 +526,15 @@ class MainWindow(QMainWindow):
         self.refresh_button = QPushButton()
         self.refresh_button.setObjectName("toolbarButton")
         self.refresh_button.setFixedSize(32, 32)
-        self.refresh_button.setIcon(icon("refresh", size=18))
+        self.refresh_button.setProperty("fluentGlyph", "SYNC")
+        self.refresh_button.setIcon(fluent_icon("SYNC") or icon("refresh", size=18))
         self.refresh_button.setToolTip("刷新本地数据")
         self.refresh_button.setAccessibleName("刷新本地数据")
         self.refresh_button.clicked.connect(self.refresh)
         self.title_bar.row.addWidget(self.refresh_button)
         self.login_button = QPushButton("登录抖音")
         self.login_button.setObjectName("toolbarAccent")
-        self.login_button.setIcon(icon("users", size=18))
+        set_fluent_icon(self.login_button, "PEOPLE", "#FFFFFF")
         self.login_button.clicked.connect(lambda: self._start_operation("login"))
         self.title_bar.row.addWidget(self.login_button)
         appearance_labels = {"light": "浅色", "dark": "深色", "auto": "自动"}
@@ -472,6 +543,7 @@ class MainWindow(QMainWindow):
         self.appearance_button.setToolTip("切换明暗外观")
         self.appearance_button.setAccessibleName("切换明暗外观")
         self.appearance_button.clicked.connect(lambda: self._set_appearance("dark" if self.appearance_mode == "light" else "light"))
+        set_fluent_icon(self.appearance_button, "CONSTRACT")
         self.title_bar.row.addWidget(self.appearance_button)
         self.title_bar.add_controls()
         root_layout.addWidget(self.title_bar)
@@ -484,9 +556,10 @@ class MainWindow(QMainWindow):
         side_layout = QVBoxLayout(sidebar)
         side_layout.setContentsMargins(12, 18, 12, 16)
         side_layout.setSpacing(12)
-        self.new_task_button = QPushButton("＋  新建任务")
+        self.new_task_button = QPushButton("新建任务")
         self.new_task_button.setObjectName("sidebarNewTask")
         self.new_task_button.setMinimumHeight(40)
+        set_fluent_icon(self.new_task_button, "ADD")
         self.new_task_button.clicked.connect(self._new_enterprise_task)
         side_layout.addWidget(self.new_task_button)
         self.nav = QListWidget()
@@ -494,10 +567,20 @@ class MainWindow(QMainWindow):
         self.nav.setIconSize(QSize(20, 20))
         for name, key in PAGES:
             self.nav.addItem(QListWidgetItem(icon(key), name))
+        self._apply_nav_icons()
         self.nav.setFixedHeight(352)
         side_layout.addWidget(self.nav)
+        # 侧栏角标：「采集任务」有待处理时显示小圆点
+        self.nav_badge = None
+        try:
+            from qfluentwidgets import DotInfoBadge
+            self.nav_badge = DotInfoBadge(self.nav.viewport())
+            self.nav_badge.hide()
+        except Exception:      # noqa: BLE001
+            self.nav_badge = None
         profile_button = QPushButton("企业资料    ›")
         profile_button.setObjectName("linkButton")
+        set_fluent_icon(profile_button, "PEOPLE")
         profile_button.clicked.connect(lambda: self.enterprise.open_forms(0))
         side_layout.addWidget(profile_button)
         line = QFrame()
@@ -512,7 +595,13 @@ class MainWindow(QMainWindow):
         self.empty_history = text("暂无传播任务", "muted")
         side_layout.addWidget(self.empty_history)
         self.side_account = text("本地工作空间", "sidebarFooter")
-        side_layout.addWidget(self.side_account)
+        footer = QHBoxLayout()
+        footer.setSpacing(8)
+        footer.setContentsMargins(0, 0, 0, 0)
+        self.side_avatar = AccountAvatar(26)
+        footer.addWidget(self.side_avatar, 0, Qt.AlignmentFlag.AlignVCenter)
+        footer.addWidget(self.side_account, 1)
+        side_layout.addLayout(footer)
         side_layout.addWidget(text("数据保存在本机", "sidebarCaption"))
         body.addWidget(sidebar)
         content_widget = QWidget()
@@ -534,6 +623,7 @@ class MainWindow(QMainWindow):
         self.operation_message = text("", "muted")
         operation_row.addWidget(self.operation_message, 1)
         self.cancel_button = QPushButton("停止操作")
+        set_fluent_icon(self.cancel_button, "CANCEL_MEDIUM")
         self.cancel_button.clicked.connect(self.operations.cancel)
         operation_row.addWidget(self.cancel_button)
         operation_layout.addLayout(operation_row)
@@ -571,6 +661,7 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(pane)
         self.records["works"].work_selected.connect(self._load_work_comments)
         self.records["works"].collect_comments_requested.connect(self._collect_work_comments)
+        self.records["works"].play_requested.connect(self._play_work)
         self.benchmark = BenchmarkPage()
         self.benchmark.check_requested.connect(self._check_benchmarks)
         self.benchmark.add_requested.connect(self._add_benchmark)
@@ -579,11 +670,11 @@ class MainWindow(QMainWindow):
         self._build_operation_controls()
         self.stack.addWidget(self._settings_page())
         self.stack.addWidget(self._overview_page())
+        from .motion import attach_combo_animations
+        attach_combo_animations(self, lambda: self.motion_enabled)
         self.nav.currentRowChanged.connect(self._navigate)
         self.nav.setCurrentRow(0)
-        self.progress = QProgressBar()
-        self.progress.setMaximumWidth(120)
-        self.progress.setRange(0, 0)
+        self.progress = progress_ring()
         self.progress.hide()
         self.statusBar().addPermanentWidget(self.progress)
         self.statusBar().setSizeGripEnabled(False)
@@ -598,6 +689,7 @@ class MainWindow(QMainWindow):
             shortcut = QShortcut(QKeySequence(f"Ctrl+{position + 1}"), self)
             shortcut.activated.connect(lambda index=position: self.nav.setCurrentRow(index))
             self._shortcuts.append(shortcut)
+        install_fluent_tooltips(self)
 
     def _overview_page(self):
         page = QWidget()
@@ -622,6 +714,8 @@ class MainWindow(QMainWindow):
             ("analyses", "分析历史", "已保存的报告总数", "analyses"),
             ("pending", "待处理任务", "本地队列中的待办", "tasks")]):
             box = MetricCard(title, note, symbol)
+            box.setToolTip("点击查看统计口径")
+            box.clicked.connect(lambda _checked=False, card=box, name=title, key=key: flyout_show(card, name, METRIC_NOTES[key]))
             self.metrics[key] = box.value
             grid.addWidget(box, 0, i)
         layout.addLayout(grid)
@@ -632,6 +726,7 @@ class MainWindow(QMainWindow):
         section = QHBoxLayout()
         section.addWidget(text("最近作品", "sectionTitle"), 1)
         see_all = QPushButton("查看全部")
+        set_fluent_icon(see_all, "RIGHT_ARROW")
         see_all.clicked.connect(lambda: self.nav.setCurrentRow(1))
         section.addWidget(see_all)
         works_layout.addLayout(section)
@@ -656,6 +751,7 @@ class MainWindow(QMainWindow):
         tasks_layout.addWidget(self.task_summary)
         tasks_layout.addStretch()
         inspect_tasks = QPushButton("查看任务记录")
+        set_fluent_icon(inspect_tasks, "HISTORY")
         inspect_tasks.clicked.connect(lambda: self.nav.setCurrentRow(4))
         tasks_layout.addWidget(inspect_tasks)
         middle.addWidget(tasks_card, 1)
@@ -670,7 +766,7 @@ class MainWindow(QMainWindow):
         self.location.setObjectName("muted")
         self.location.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.location)
-        scroller = QScrollArea()
+        scroller = smooth_scroll_area()
         scroller.setWidgetResizable(True)
         scroller.setWidget(page)
         return scroller
@@ -694,17 +790,18 @@ class MainWindow(QMainWindow):
         self.key_input.setPlaceholderText("输入新的 API Key；留空保留已保存的 Key")
         form.addWidget(self.key_input)
         form.addWidget(text("模型", "sectionTitle"))
-        self.model_input = QComboBox()
+        self.model_input = ComboBox()
         self.model_input.addItems(["deepseek-flash", "deepseek-v4-pro"])
         form.addWidget(self.model_input)
         form.addWidget(text("思考", "sectionTitle"))
-        self.effort_input = QComboBox()
+        self.effort_input = ComboBox()
         self.effort_input.addItem("低", "low")
         self.effort_input.addItem("中", "high")
         self.effort_input.addItem("高", "max")
         form.addWidget(self.effort_input)
         self.save_button = QPushButton("保存设置")
         self.save_button.setObjectName("primary")
+        set_fluent_icon(self.save_button, "SAVE", "#FFFFFF")
         self.save_button.clicked.connect(self._save)
         form.addSpacing(10)
         form.addWidget(self.save_button, alignment=Qt.AlignmentFlag.AlignLeft)
@@ -718,10 +815,27 @@ class MainWindow(QMainWindow):
         storage_card, storage_layout = card("数据与使用范围")
         storage_card.setMaximumWidth(800)
         storage_layout.addWidget(text("作品、互动者与历史报告保存在本机。窗口顶部可登录抖音，任务记录中可启动采集，分析报告中可生成画像、评价和计划。", "muted"))
+        cache_row = QHBoxLayout()
+        cache_row.setSpacing(10)
+        cache_row.addWidget(text("视频缓存上限", "sectionTitle"))
+        self.video_cache_combo = ComboBox()
+        for caption, size in (("不缓存", 0), ("200 MB", 200), ("500 MB", 500), ("1 GB", 1024)):
+            self.video_cache_combo.addItem(caption, size)
+        self.video_cache_combo.setCurrentIndex(max(0, self.video_cache_combo.findData(self.video_cache_limit())))
+        self.video_cache_combo.currentIndexChanged.connect(self._set_video_cache_limit)
+        cache_row.addWidget(self.video_cache_combo)
+        self.video_cache_usage = text("", "muted")
+        cache_row.addWidget(self.video_cache_usage, 1)
+        clear_cache = QPushButton("清空视频缓存")
+        set_fluent_icon(clear_cache, "DELETE")
+        clear_cache.clicked.connect(self._clear_video_cache)
+        cache_row.addWidget(clear_cache)
+        storage_layout.addLayout(cache_row)
+        self._refresh_cache_usage()
         layout.addWidget(storage_card)
         appearance_card, appearance_layout = card("外观", "为整个工作空间选择明暗外观；跟随系统会随 Windows 主题自动切换。")
         appearance_card.setMaximumWidth(800)
-        self.appearance_combo = QComboBox()
+        self.appearance_combo = ComboBox()
         self.appearance_combo.setAccessibleName("界面外观")
         self.appearance_combo.addItem("浅色", "light")
         self.appearance_combo.addItem("深色", "dark")
@@ -731,20 +845,32 @@ class MainWindow(QMainWindow):
         appearance_layout.addWidget(self.appearance_combo)
         layout.addWidget(appearance_card)
         motion_card, motion_layout = card("交互动效", "展开、页面切换和处理中状态使用轻量动画。")
-        self.motion_toggle = QCheckBox("启用界面动效")
+        self.motion_toggle = switch("启用界面动效")
         self.motion_toggle.setChecked(self.motion_enabled)
-        self.motion_toggle.toggled.connect(self._set_motion)
+        self.motion_toggle.checkedChanged.connect(self._set_motion)
         motion_layout.addWidget(self.motion_toggle)
         layout.addWidget(motion_card)
         layout.setSpacing(20)
         layout.addStretch()
-        scroll = QScrollArea()
+        scroll = smooth_scroll_area()
         scroll.setWidgetResizable(True)
         scroll.setWidget(page)
         self.settings_tabs = QTabWidget()
         self.settings_tabs.addTab(scroll, "模型与外观")
         self.settings_tabs.addTab(self.enterprise.tabs, "企业资料与指标")
         return self.settings_tabs
+
+    def _apply_nav_icons(self):
+        """侧栏改用 Fluent 图标；深浅色切换时重取一次，避免深色下看不清。"""
+        if not hasattr(self, "nav"):
+            return
+        for index, (_, key) in enumerate(PAGES):
+            item = self.nav.item(index)
+            if item is None:
+                continue
+            name = NAV_ICONS.get(key)
+            fresh = fluent_icon(name) if name else None
+            item.setIcon(fresh or icon(key))
 
     def _navigate(self, index):
         self.heading.setText(PAGES[index][0])
@@ -763,7 +889,7 @@ class MainWindow(QMainWindow):
     def _build_operation_controls(self):
         self.operation_buttons = []
         collection = QHBoxLayout()
-        self.collect_kind = QComboBox()
+        self.collect_kind = ComboBox()
         for title, kind in [("快速采集", "quick"), ("重点深采", "deep"), ("账号资料", "fetch_self"), ("互动通知", "fetch_notice"),
                             ("点赞人名单", "fetch_likers"), ("互动者作品", "fetch_user_works")]:
             self.collect_kind.addItem(title, kind)
@@ -773,11 +899,12 @@ class MainWindow(QMainWindow):
         self.collect_limit.setRange(1, 200)
         self.collect_limit.setValue(40)
         collection.addWidget(self.collect_limit)
-        self.collect_force = QCheckBox("强制刷新缓存")
+        self.collect_force = switch("强制刷新缓存")
         collection.addWidget(self.collect_force)
         collection.addStretch()
         start_collection = QPushButton("开始采集")
         start_collection.setObjectName("primary")
+        set_fluent_icon(start_collection, "SYNC", "#FFFFFF")
         start_collection.clicked.connect(lambda: self._start_operation("collect"))
         collection.addWidget(start_collection)
         self.operation_buttons.append(start_collection)
@@ -785,18 +912,19 @@ class MainWindow(QMainWindow):
         self.records["tasks"].layout().insertWidget(1, text("快速采集：作品与点赞名单；重点深采：为多作品互动者补充样本。已有通知入口仍可单独使用。", "muted"))
 
         audience = QHBoxLayout()
-        self.audience_filter = QComboBox()
+        self.audience_filter = ComboBox()
         for title, value in [("有效互动者", "active"), ("多作品互动", "repeated"), ("资料待补", "incomplete"),
                              ("暂无作品样本", "unsampled"), ("原始关联记录", "raw")]:
             self.audience_filter.addItem(title, value)
         self.audience_filter.currentIndexChanged.connect(self._audience_changed)
         audience.addWidget(self.audience_filter)
         audience.addStretch()
-        self.sample_depth = QComboBox()
+        self.sample_depth = ComboBox()
         self.sample_depth.addItem("补充12条样本", 12)
         self.sample_depth.addItem("按配置深采", None)
         audience.addWidget(self.sample_depth)
         enrich = QPushButton("补充所选作品")
+        set_fluent_icon(enrich, "DOWNLOAD")
         enrich.clicked.connect(self._enrich_selected)
         audience.addWidget(enrich)
         self.operation_buttons.append(enrich)
@@ -808,7 +936,7 @@ class MainWindow(QMainWindow):
         self.analysis_limit.setRange(1, 200)
         self.analysis_limit.setValue(30)
         analysis.addWidget(self.analysis_limit)
-        self.analysis_force = QCheckBox("重新生成已有结果")
+        self.analysis_force = switch("重新生成已有结果")
         analysis.addWidget(self.analysis_force)
         analysis.addStretch()
         for title, kind in [("分析互动者", "profile"), ("评价我的作品", "review"), ("生成内容计划", "plan")]:
@@ -857,7 +985,19 @@ class MainWindow(QMainWindow):
         if not self.operation_panel.isVisible():
             self.operation_panel.show()
             fade_in(self.operation_panel, self.motion_enabled)
+        self.state_tip = state_tip(self, "正在执行", "请稍候…")
+        self._place_state_tip()
         self.operations.start(kind, options)
+
+    def _place_state_tip(self):
+        """长任务浮窗贴在窗口右下角。"""
+        tip = getattr(self, "state_tip", None)
+        if tip is None:
+            return
+        try:
+            tip.move(self.width() - tip.width() - 28, self.height() - tip.height() - 28)
+        except RuntimeError:
+            self.state_tip = None
 
     def _operation_event(self, event):
         message = event.get("message")
@@ -911,9 +1051,27 @@ class MainWindow(QMainWindow):
         if message:
             self.operation_message.setText(str(message))
             self.statusBar().showMessage(str(message))
+            tip = getattr(self, "state_tip", None)
+            if tip is not None:
+                try:
+                    tip.setContent(str(message))
+                    self._place_state_tip()
+                except RuntimeError:
+                    self.state_tip = None
 
     def _operation_result(self, result):
         self.operation_message.setText(result["message"])
+        tip = getattr(self, "state_tip", None)
+        if tip is not None:
+            try:
+                tip.setContent(result["message"][:80])
+                tip.setState(True)
+                QTimer.singleShot(1500, tip.close)
+            except RuntimeError:
+                pass
+            self.state_tip = None
+        if result.get("message") and not result.get("failed"):
+            notify(self, "操作完成", result["message"][:60], "success")
         if result.get("kind") == "enterprise" and result.get("report_id"):
             self.enterprise_report_id = result["report_id"]
             self.enterprise.right_tabs.setCurrentIndex(1)
@@ -1204,13 +1362,19 @@ class MainWindow(QMainWindow):
         self.appearance_mode = resolved
         self.ui_preferences.setValue("appearance", mode)
         if QApplication.instance().property("scoutTheme") != resolved:
+            overlay = self._theme_overlay_show()
             apply_theme(QApplication.instance(), resolved, self._backdrop_enabled)
-            if self.isVisible():
-                fade_in(self, self.motion_enabled, start=0.7, duration=150)
+            if overlay is not None:
+                self._theme_overlay_fade(overlay)
             if self._native_frame_applied:
                 self._sync_dwm_theme()
         labels = {"light": "浅色", "dark": "深色", "auto": "自动"}
         self.appearance_button.setText(labels[mode])
+        self._apply_nav_icons()
+        self.side_avatar.refresh()
+        for pane in getattr(self, "records", {}).values():
+            pane._apply_search_icon()
+        install_fluent_tooltips(self)
         self.appearance_button.setToolTip("切换明暗外观" if mode != "auto" else "跟随系统外观")
         self.appearance_combo.blockSignals(True)
         self.appearance_combo.setCurrentIndex(self.appearance_combo.findData(mode))
@@ -1220,6 +1384,49 @@ class MainWindow(QMainWindow):
                 page.model.dataChanged.emit(page.model.index(0, 0), page.model.index(page.model.rowCount() - 1, page.model.columnCount() - 1))
         names = {"light": "浅色", "dark": "深色", "auto": "自动（跟随系统）"}
         self.statusBar().showMessage(f"已切换为{names[mode]}外观", 3000)
+
+    def _theme_overlay_show(self):
+        """切换前给旧外观拍一张快照：换肤在底下完成，再淡出，遮住重排空档。"""
+        if not self.motion_enabled or not self.isVisible():
+            return None
+        previous = getattr(self, "_theme_overlay", None)
+        if previous is not None:
+            previous.hide()
+            previous.deleteLater()
+            self._theme_overlay = None
+        try:
+            snapshot = self.grab()
+        except Exception:
+            return None
+        if snapshot.isNull():
+            return None
+        overlay = QLabel(self)
+        overlay.setObjectName("themeFade")
+        overlay.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        overlay.setPixmap(snapshot)
+        overlay.setGeometry(self.rect())
+        overlay.show()
+        overlay.raise_()
+        self._theme_overlay = overlay
+        return overlay
+
+    def _theme_overlay_fade(self, overlay):
+        effect = QGraphicsOpacityEffect(overlay)
+        overlay.setGraphicsEffect(effect)
+        animation = QPropertyAnimation(effect, b"opacity", self)
+        animation.setDuration(220)
+        animation.setStartValue(1.0)
+        animation.setEndValue(0.0)
+        animation.setEasingCurve(QEasingCurve.Type.OutCubic)
+        animation.finished.connect(lambda: self._theme_overlay_done(overlay))
+        self._theme_animation = animation
+        animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+
+    def _theme_overlay_done(self, overlay):
+        if getattr(self, "_theme_overlay", None) is overlay:
+            self._theme_overlay = None
+        overlay.hide()
+        overlay.deleteLater()
 
     def _set_motion(self, enabled):
         self.motion_enabled = enabled
@@ -1252,6 +1459,135 @@ class MainWindow(QMainWindow):
         self.connection_state.setText(("模型已配置" if self.has_key else "模型未配置") + " · "
                                      + ("抖音登录态已保存" if self.login_saved else "抖音未登录"))
 
+    def _sync_avatar(self, url, sec_uid):
+        """头像：先看本地缓存，没有再后台下一次；失败就保持首字圆牌。"""
+        if not sec_uid:
+            return
+        from .avatar import avatar_path, fetch_avatar
+        local = avatar_path(self.service.paths.root, str(sec_uid))
+        if local.exists() and self.side_avatar.set_image(local):
+            return
+        if not url or self.avatar_jobs.busy:
+            return
+        self.avatar_jobs.submit(lambda: str(local) if fetch_avatar(str(url), local) else "")
+
+    def _avatar_ready(self, path):
+        if path:
+            self.side_avatar.set_image(path)
+
+    # ── 视频播放与缓存 ───────────────────────────────────────
+    VIDEO_CACHE_KEY = "videoCacheMb"
+
+    def video_cache_limit(self) -> int:
+        try:
+            return max(0, int(self.ui_preferences.value(self.VIDEO_CACHE_KEY, 500)))
+        except (TypeError, ValueError):
+            return 500
+
+    def _refresh_cache_usage(self):
+        from . import media
+        used = media.used_bytes(self.service.paths.root)
+        self.video_cache_usage.setText(f"已用 {used / 1048576:.1f} MB")
+
+    def _prune_media_cache(self):
+        from . import media
+        media.prune(self.service.paths.root, self.video_cache_limit())
+        self._refresh_cache_usage()
+
+    def _set_video_cache_limit(self, index):
+        size = self.video_cache_combo.itemData(index)
+        if size is None:
+            return
+        self.ui_preferences.setValue(self.VIDEO_CACHE_KEY, int(size))
+        self._prune_media_cache()
+
+    def _clear_video_cache(self):
+        from . import media
+        removed = media.clear(self.service.paths.root)
+        self._refresh_cache_usage()
+        notify(self, "已清空视频缓存", f"释放 {removed / 1048576:.1f} MB", "success")
+
+    def _play_work(self, record):
+        """在对话窗口里打开一条作品：视频/图文/纯文本三种形态。"""
+        import json
+        import tempfile
+        from . import media
+        aweme_id = str(record.get("aweme_id") or "")
+        if not aweme_id:
+            return
+        title = str(record.get("description") or "") or f"作品 {aweme_id}"
+        play_url = str(record.get("play_url") or "")
+        images = record.get("images")
+        if images is None:
+            images = record.get("images_json")
+        if isinstance(images, str):
+            try:
+                images = json.loads(images or "[]")
+            except ValueError:
+                images = []
+        images = [str(url) for url in (images or []) if url]
+        kind = str(record.get("media_type") or "")
+        if not kind:
+            kind = "video" if play_url else ("images" if images else "unknown")
+        self.nav.setCurrentRow(0)
+
+        if kind == "images" or (not play_url and images):
+            card = self.enterprise.show_media_card("images", title, f"图文作品：{len(images)} 张图片" if images else "画面正在准备…")
+            self._image_card = card
+            if not images:
+                card.set_status("这条图文作品没有记录图片地址，重新采集一次即可")
+                return
+            self.image_jobs.submit(lambda: self._download_images(aweme_id, images))
+            return
+        if not play_url:
+            card = self.enterprise.show_media_card("text", title, "这条作品既没有视频轨也没有图片，可能是纯文本或已设为隐私")
+            self._image_card = card
+            card.set_status("重新采集一次该作品后再试")
+            return
+
+        card = self.enterprise.show_media_card("video", title, "正在准备视频…")
+        self._video_card = card
+        if self.video_cache_limit() > 0:
+            dest = media.video_path(self.service.paths.root, aweme_id)
+        else:
+            dest = Path(tempfile.gettempdir()) / "scout-video" / f"{aweme_id}.mp4"
+        self._video_dest = dest
+        if dest.exists() and dest.stat().st_size > 4096:
+            media.touch(self.service.paths.root, aweme_id)
+            card.play_file(dest)
+            return
+        card.set_status("正在下载视频…")
+        self.media_jobs.submit(lambda: str(dest) if media.download_video(play_url, dest) else "")
+
+    def _download_images(self, aweme_id, urls):
+        from . import media
+        saved = []
+        for index, url in enumerate(urls[:12]):
+            dest = media.image_path(self.service.paths.root, aweme_id, index)
+            if (dest.exists() and dest.stat().st_size > 1024) or media.download_file(url, dest):
+                saved.append(str(dest))
+        return saved
+
+    def _images_ready(self, paths):
+        card = getattr(self, "_image_card", None)
+        if card is None:
+            return
+        if not paths:
+            card.set_status("图片下载失败：地址可能已过期，重新采集这条作品后再试")
+            return
+        card.set_images(paths)
+        self._prune_media_cache()
+
+    def _video_ready(self, path):
+        card = getattr(self, "_video_card", None)
+        if card is None:
+            return
+        if not path:
+            card.set_status("下载失败：链接可能已过期，重新采集这条作品后再播放")
+            return
+        card.play_file(Path(path))
+        self._prune_media_cache()
+
     def _result(self, result):
         key, search, data = result
         if key == "overview":
@@ -1261,6 +1597,8 @@ class MainWindow(QMainWindow):
             nickname = data["self"].get("nickname")
             self.account.setText(f"已有账号资料：{nickname}" if nickname else "尚未采集账号资料")
             self.side_account.setText(nickname or "本地工作空间")
+            self.side_avatar.set_text(nickname or "")
+            self._sync_avatar(data["self"].get("avatar_url"), data["self"].get("sec_uid"))
             self.login_saved = data["login"]["saved"]
             self.connection_state.setText("登录态已保存 · 待验证" if self.login_saved else "登录未保存")
             self.login_button.setText("重新登录" if self.login_saved else "登录抖音")
@@ -1268,6 +1606,7 @@ class MainWindow(QMainWindow):
             if self.login_saved:
                 self.account.setText(f"已保存登录态 · {nickname or '你的抖音账号'}（使用前会验证）")
             self.task_summary.update_counts(data["task_counts"])
+            self._sync_nav_badge(int(data.get("pending") or 0))
             quality = data["quality"]
             self.quality_summary.setText(f"质量检查 · 有效互动者 {quality['active_users']} · 多作品互动 {quality['repeated_users']} · "
                 f"待补资料 {quality['incomplete_profiles']} · 去重关系 {quality['valid_edges']} · 待核验关联 {quality['invalid_edges']}")
@@ -1336,8 +1675,36 @@ class MainWindow(QMainWindow):
             self.pending = True
         self.statusBar().showMessage("设置已保存（尚未验证连通性）" if key == "settings" else "本地数据已更新", 6000)
 
+    def _sync_nav_badge(self, count):
+        """侧栏「采集任务」后面挂一个待处理小圆点。"""
+        badge = getattr(self, "nav_badge", None)
+        if badge is None:
+            return
+        try:
+            row = next(index for index, (_, key) in enumerate(PAGES) if key == "tasks")
+            rect = self.nav.visualItemRect(self.nav.item(row))
+            if count <= 0 or rect.isNull():
+                badge.hide()
+                return
+            badge.adjustSize()
+            badge.move(rect.right() - badge.width() - 6, rect.center().y() - badge.height() // 2)
+            badge.show()
+            badge.raise_()
+        except Exception:      # noqa: BLE001 —— 角标只是提示，失败不影响主流程
+            badge.hide()
+
     def _error(self, error):
         self.start_enterprise_after_save = None
+        tip = getattr(self, "state_tip", None)
+        if tip is not None:
+            try:
+                tip.setContent(str(error)[:80])
+                tip.setState(False)
+                QTimer.singleShot(2500, tip.close)
+            except RuntimeError:
+                pass
+            self.state_tip = None
+        notify(self, "操作失败", str(error)[:80], "error", duration=4000)
         if self.enterprise.processing:
             self.enterprise.set_processing(False, "本次任务未完成：" + error)
         if self.operations.busy:

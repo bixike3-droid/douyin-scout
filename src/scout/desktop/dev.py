@@ -31,7 +31,7 @@ class DevReload(QObject):
         return (w.initialized and not w.closing and not w.jobs.busy and not w.operations.busy
                 and not w.enterprise.profile_dirty and not w.enterprise.report_dirty
                 and not w.enterprise.composer.toPlainText().strip() and not w.key_input.text()
-                and w.model_input.text() == getattr(w, "saved_model", ""))
+                and w.model_input.currentText() == getattr(w, "saved_model", ""))
 
     def check(self):
         current = self.fingerprint()

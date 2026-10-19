@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, QPropertyAnimation, QEasingCurve
 from PySide6.QtWidgets import QApplication, QFrame, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from .appearance import color
+from .branding import brand_pixmap
 from .components import text
 from .motion import ActivityDot
 
@@ -21,7 +22,7 @@ class Splash(QWidget):
         self.setFixedSize(420, 246)
         self.setStyleSheet(f"""
 QFrame#splashCard {{ background: {color('window')}; border: 1px solid {color('border')}; border-radius: 16px; }}
-QLabel#splashMark {{ background: {color('accent')}; color: #FFFFFF; border-radius: 22px; font-size: 20px; font-weight: 600; }}
+QLabel#splashMark {{ background: transparent; }}
 QLabel#splashTitle {{ font-size: 21px; font-weight: 600; color: {color('text')}; }}
 QLabel#splashSubtitle, QLabel#splashStage {{ color: {color('muted')}; font-size: 12px; }}
 """)
@@ -34,10 +35,15 @@ QLabel#splashSubtitle, QLabel#splashStage {{ color: {color('muted')}; font-size:
         layout.setContentsMargins(30, 28, 30, 24)
         layout.setSpacing(8)
         mark_row = QHBoxLayout()
-        mark = QLabel("源")
+        mark = QLabel()
         mark.setObjectName("splashMark")
-        mark.setFixedSize(44, 44)
+        mark.setFixedSize(48, 48)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo = brand_pixmap(48)
+        if logo is not None:
+            mark.setPixmap(logo)
+        else:
+            mark.setText("源")
         mark_row.addWidget(mark)
         mark_row.addStretch()
         layout.addLayout(mark_row)

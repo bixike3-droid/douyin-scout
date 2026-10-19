@@ -5,11 +5,12 @@ import re
 import sys
 
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot, QSize
-from PySide6.QtGui import QTextBlockFormat, QTextCursor, QPixmap
+from PySide6.QtGui import QTextBlockFormat, QTextCursor, QPixmap, QIcon
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QPushButton, QPlainTextEdit,
     QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel)
 from ..analyze.agents import DEFAULT_AGENT_ID, TEAM, get as get_agent
 from .enterprise import EnterprisePage, report_time
+from .branding import brand_pixmap
 from .components import text, ElidedLabel
 from .motion import ActivityDot, Disclosure, fade_in
 from .theme import agent_badge, icon
@@ -765,9 +766,10 @@ class HarnessPage(EnterprisePage):
         self.splitter.setHandleWidth(4)
         self.splitter.setChildrenCollapsible(False)
         self.layout().addWidget(self.splitter)
-        center = QWidget()
+        center = QFrame()
         center.setObjectName("conversationPane")
         center.setMinimumWidth(410)
+        center.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         main = QVBoxLayout(center)
         main.setContentsMargins(28, 24, 28, 16)
         main.setSpacing(14)
@@ -911,7 +913,17 @@ class HarnessPage(EnterprisePage):
         row.addStretch()
         box.addLayout(row)
         main.addWidget(composer_box)
-        self.splitter.addWidget(center)
+        # 圆角面板外面再包一层同色外壳：四个角的弧形区域本来会露出窗口底色，
+        # 看起来像缺了一块，这一层把空隙填成与面板一致的颜色。
+        shell = QWidget()
+        shell.setObjectName("conversationShell")
+        shell.setMinimumWidth(410)
+        shell.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        shell_layout = QVBoxLayout(shell)
+        shell_layout.setContentsMargins(0, 0, 0, 0)
+        shell_layout.setSpacing(0)
+        shell_layout.addWidget(center)
+        self.splitter.addWidget(shell)
         right = QWidget()
         right.setObjectName("resultPane")
         right.setMinimumWidth(360)
@@ -1630,6 +1642,26 @@ class HarnessPage(EnterprisePage):
         if card is not None:
             card.mark_resolved(bool(event.get("approved")))
 
+    def show_media_card(self, kind: str = "video", title: str = "", detail: str = ""):
+        """在对话流里插入媒体卡：video 播放器 / images 图文翻页 / text 说明。"""
+        from .video import ImageCard, VideoCard
+        self.end_answer()
+        card = VideoCard(title) if kind == "video" else ImageCard(title)
+        if kind == "text":
+            card.set_text_only(detail or "这条作品没有可展示的画面")
+        elif detail:
+            card.set_status(detail)
+        self.transcript.show()
+        self.transcript_layout.addWidget(card, alignment=Qt.AlignmentFlag.AlignLeft)
+        card.show()
+        if self.motion_enabled:
+            fade_in(card, True)
+        self._scroll_chat_bottom()
+        return card
+
+    def show_video_card(self, title: str, detail: str = ""):
+        return self.show_media_card("video", title, detail)
+
     def _analyze_hot_topic(self, request):
         """点热点：把拆解请求直接发给团队（走正常对话链路）。"""
         self.task_requested.emit(request, False)
@@ -1701,7 +1733,7 @@ class TitleBar(QWidget):
         self.row.setSpacing(10)
         self.brand = QPushButton("源镜 · 传播工作台")
         self.brand.setObjectName("appBrand")
-        self.brand.setIcon(icon("source", "#007AFF", 27))
+        self.brand.setIcon(QIcon(brand_pixmap(26)))
         self.row.addWidget(self.brand)
         self.row.addStretch()
 

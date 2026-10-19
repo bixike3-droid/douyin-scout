@@ -24,6 +24,82 @@ _CURSOR_KEYS = ("max_cursor", "cursor", "min_cursor", "offset", "next_cursor")
 _HAS_MORE_KEYS = ("has_more", "hasMore")
 
 
+def _first_url(block: Any) -> str:
+    if isinstance(block, dict):
+        urls = block.get("url_list")
+        if isinstance(urls, list) and urls:
+            return as_str(urls[0])
+        if block.get("url"):
+            return as_str(block["url"])
+    if isinstance(block, str):
+        return block
+    return ""
+
+
+def pick_play_url(node: dict) -> str:
+    """取一个能直接下载的 mp4 地址。
+
+    优先 H.264（Windows 兼容性最好），没有再退到 play_addr，
+    最后看 bit_rate 列表（多码率版本里通常只在这里）。
+    """
+    video = node.get("video") if isinstance(node.get("video"), dict) else {}
+    for key in ("play_addr_h264", "play_addr"):
+        url = _first_url(video.get(key))
+        if url:
+            return url
+    rates = video.get("bit_rate") or video.get("bitRateList")
+    if isinstance(rates, list):
+        for rate in rates:
+            if isinstance(rate, dict):
+                url = _first_url(rate.get("play_addr"))
+                if url:
+                    return url
+    return ""
+
+
+def url_expiry(url: str) -> int:
+    """从签名地址里读 x-expires（epoch 秒），没有则返回 0。"""
+    from urllib.parse import parse_qs, urlparse
+    try:
+        query = parse_qs(urlparse(url).query)
+        for key in ("x-expires", "expires"):
+            values = query.get(key)
+            if values and str(values[0]).isdigit():
+                return int(values[0])
+    except Exception:      # noqa: BLE001
+        return 0
+    return 0
+
+
+def pick_images(node: dict) -> list[str]:
+    """图文作品的图片地址（按顺序）。部分版本包在 image_post_info.images 里。"""
+    blocks = node.get("images")
+    if not isinstance(blocks, list):
+        info = node.get("image_post_info") if isinstance(node.get("image_post_info"), dict) else {}
+        blocks = info.get("images") if isinstance(info.get("images"), list) else []
+    urls: list[str] = []
+    for block in blocks:
+        if isinstance(block, dict):
+            url = _first_url(block) or _first_url(block.get("display_image")) or _first_url(block.get("origin_image"))
+        else:
+            url = _first_url(block)
+        if url:
+            urls.append(url)
+    return urls
+
+
+def media_kind(node: dict, play_url: str, images: list[str]) -> str:
+    """作品类型：video / images / unknown。"""
+    if play_url:
+        return "video"
+    if images:
+        return "images"
+    aweme_type = as_int(first_of(node, ("aweme_type", "media_type")))
+    if aweme_type in (2, 68, 150):      # 抖音的图文作品类型编号
+        return "images"
+    return "unknown"
+
+
 def pick_avatar(node: dict) -> str:
     for key in ("avatar_larger", "avatar_medium", "avatar_thumb", "avatar_168x168", "avatar_300x300"):
         block = node.get(key)
@@ -93,6 +169,9 @@ def normalize_work(node: dict) -> dict[str, Any]:
         urls = cover.get("url_list")
         cover_url = as_str(urls[0]) if isinstance(urls, list) and urls else as_str(cover.get("url"))
     music = node.get("music") if isinstance(node.get("music"), dict) else {}
+    play_url = pick_play_url(node)
+    images = pick_images(node)
+    kind = media_kind(node, play_url, images)
     def metric(*keys):
         value = first_of(stats, keys)
         return as_int(value if value is not None else first_of(node, keys))
@@ -110,6 +189,10 @@ def normalize_work(node: dict) -> dict[str, Any]:
         "music_title": as_str(music.get("title")),
         "hashtags": extract_hashtags(node),
         "cover_url": cover_url,
+        "play_url": play_url,
+        "play_url_expires": url_expiry(play_url) if play_url else 0,
+        "images": images,
+        "media_type": kind,
         "share_url": as_str(first_of(node, ("share_url", "share_info"))),
         "is_top": 1 if node.get("is_top") or node.get("is_top_show") else 0,
     }

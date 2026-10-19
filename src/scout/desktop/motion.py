@@ -1,5 +1,6 @@
 """Small native transitions; never manufacture operation progress."""
-from PySide6.QtCore import Qt, Property, QObject, QEvent, QPropertyAnimation, QEasingCurve
+from PySide6.QtCore import (Qt, Property, QObject, QEvent, QPropertyAnimation,
+                            QEasingCurve, QAbstractAnimation)
 from PySide6.QtGui import QPainter, QColor
 from PySide6.QtWidgets import QWidget, QFrame, QPushButton, QVBoxLayout, QHBoxLayout, QGraphicsOpacityEffect, QSizePolicy
 from .components import text
@@ -138,6 +139,65 @@ def fade_popup(widget, duration=90):
     animation.setEasingCurve(QEasingCurve.Type.OutCubic)
     widget._popup_fade = animation
     animation.start()
+
+
+class ComboPopupMotion(QObject):
+    """下拉框弹层：淡入 + 轻微下落，避免“啪”地一下弹出来。"""
+
+    def __init__(self, combo, enabled):
+        super().__init__(combo)
+        self._combo = combo
+        self._enabled = enabled
+        self._container = None
+        self.attach()
+
+    def attach(self):
+        """弹层容器可能晚于控件创建，第一次显示前再挂一次。"""
+        try:
+            container = self._combo.view().window()
+        except RuntimeError:
+            return
+        if container is None or container is self._container:
+            return
+        # 圆角弹层需要透明底色，否则方角背景会把圆角盖掉。
+        try:
+            container.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            container.setObjectName("comboPopup")
+            view = self._combo.view()
+            view.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+            view.viewport().setAutoFillBackground(False)
+            container.style().unpolish(container)
+            container.style().polish(container)
+            view.style().unpolish(view)
+            view.style().polish(view)
+        except RuntimeError:
+            pass
+        container.installEventFilter(self)
+        self._container = container
+
+    def eventFilter(self, obj, event):
+        try:
+            if event.type() == QEvent.Type.Show and self._enabled():
+                # 只做淡入：位移动画会和 QComboBox 自身的弹层定位打架，
+                # 表现为弹层位置错、盖在控件上。
+                animation = QPropertyAnimation(obj, b"windowOpacity", obj)
+                animation.setDuration(170)
+                animation.setStartValue(0.0)
+                animation.setEndValue(1.0)
+                animation.setEasingCurve(QEasingCurve.Type.OutQuart)
+                obj._combo_fade = animation
+                animation.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        except Exception:
+            pass
+        return False
+
+
+def attach_combo_animations(root, enabled):
+    """给整个窗口（含后续页面）里的下拉框挂上过渡动画。"""
+    from PySide6.QtWidgets import QComboBox
+    for combo in root.findChildren(QComboBox):
+        if getattr(combo, "_combo_motion", None) is None:
+            combo._combo_motion = ComboPopupMotion(combo, enabled)
 
 
 class PopupFader(QObject):
