@@ -203,7 +203,7 @@
       downloadButton.href = DOWNLOAD_BASE + "yuanjing-latest.zip";
       downloadButton.setAttribute("download", "yuanjing-0.9.0-windows-x64.zip");
     }
-    if (versionNode) versionNode.textContent = "v0.9.0 · Windows · 95MB";
+    if (versionNode) versionNode.textContent = "v0.9.1 · Windows · 95MB";
   } else if (location.protocol === "file:") {
     if (versionNode) versionNode.textContent = "最新版本请见 Releases";
   } else {
