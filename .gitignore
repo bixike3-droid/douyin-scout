@@ -37,3 +37,7 @@ userdata/
 
 build*.log
 
+
+# 站点内的安装包不进仓库（上传时单独放）
+site/download/*.zip
+site/download/*.exe
