@@ -7,7 +7,7 @@ import sys
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot, QSize
 from PySide6.QtGui import QTextBlockFormat, QTextCursor, QPixmap, QIcon
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QPushButton, QPlainTextEdit,
-    QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel)
+    QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel, QFileDialog)
 from ..analyze.agents import DEFAULT_AGENT_ID, TEAM, get as get_agent
 from .enterprise import EnterprisePage, report_time
 from .branding import brand_pixmap
@@ -131,6 +131,8 @@ class ReasoningPanel(QFrame):
 
 class Composer(QPlainTextEdit):
     submitted = Signal()
+    files_added = Signal(list)
+    image_added = Signal(object)
     MIN_HEIGHT = 52
     MAX_HEIGHT = 64          # 约两行半，再多就在框内滚动
 
@@ -159,6 +161,40 @@ class Composer(QPlainTextEdit):
     def inputMethodEvent(self, event):
         self.composing = bool(event.preeditString())
         super().inputMethodEvent(event)
+
+    def canInsertFromMimeData(self, source):
+        return source.hasUrls() or source.hasImage() or super().canInsertFromMimeData(source)
+
+    def insertFromMimeData(self, source):
+        if source.hasUrls():
+            files = [url.toLocalFile() for url in source.urls() if url.isLocalFile()]
+            if files:
+                self.files_added.emit(files)
+                return
+        if source.hasImage():
+            self.image_added.emit(source.imageData())
+            return
+        super().insertFromMimeData(source)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasUrls():
+            if any(url.isLocalFile() for url in event.mimeData().urls()):
+                event.acceptProposedAction()
+                return
+        if event.mimeData().hasImage():
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dragMoveEvent(self, event):
+        self.dragEnterEvent(event)
+
+    def dropEvent(self, event):
+        if event.mimeData().hasImage() or (event.mimeData().hasUrls() and any(u.isLocalFile() for u in event.mimeData().urls())):
+            self.insertFromMimeData(event.mimeData())
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
 
 
 class ConfirmationCard(QFrame):
@@ -699,6 +735,51 @@ class WorkflowCard(QFrame):
         self.dialog.show()
 
 
+class ChatRunCard(WorkflowCard):
+    """The same recovery affordance for tool conversations as for team workflows."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.details.setText("查看执行记录")
+        self.resume.setText("继续未完成任务")
+        self.rerun.hide()
+
+    def apply(self, run, busy=False):
+        self.run = run
+        if not run:
+            self.hide()
+            return
+        states = {"running": "处理中" if busy else "上次执行未结束", "waiting": "等待确认",
+                  "failed": "失败", "cancelled": "已停止", "complete": "已完成",
+                  "partial": "部分完成", "needs_review": "请核对上次操作结果"}
+        self.title.setText("对话任务 · " + states.get(run["status"], run["status"]))
+        lines = [get_agent(run["agent"]).name + f" · 已尝试 {run['tool_count']} 次操作"]
+        if run.get("error"):
+            lines.append(run["error"])
+        self.steps.setText("\n".join(lines))
+        self.details.setEnabled(bool(run.get("calls")))
+        self.resume.setVisible(run["status"] not in ("complete", "partial"))
+        self.resume.setEnabled(not busy and run["status"] != "needs_review")
+        self.show()
+
+    def show_details(self):
+        if not self.run:
+            return
+        from ..tools.registry import display_name
+        self.dialog = QDialog(self)
+        self.dialog.setWindowTitle("对话执行记录")
+        self.dialog.resize(720, 500)
+        layout = QVBoxLayout(self.dialog)
+        browser = SafeMessageBrowser()
+        lines = []
+        for call in self.run.get("calls", []):
+            result = call.get("result")
+            lines.append(display_name(call["tool"]) + "：" +
+                         (str(result.get("summary") or "结果已保存") if result else "尚未保存结果"))
+        browser.setPlainText("\n\n".join(lines) or "尚无执行记录")
+        layout.addWidget(browser)
+        self.dialog.show()
+
+
 class HarnessPage(EnterprisePage):
     confirmation_answered = Signal(str, bool)
     hot_refresh_requested = Signal()
@@ -706,12 +787,14 @@ class HarnessPage(EnterprisePage):
     task_requested = Signal(str, bool)
     cancel_requested = Signal()
     workflow_requested = Signal(int, bool)
+    chat_resume_requested = Signal(int)
     history_changed = Signal(object)
     report_selected = Signal(int)
     conversation_selected = Signal(int)
 
-    def __init__(self):
+    def __init__(self, attachment_paths=None):
         super().__init__()
+        self.attachment_paths = attachment_paths
         self.motion_enabled = True
         self.new_task_mode = True
         self.processing = False
@@ -806,6 +889,7 @@ class HarnessPage(EnterprisePage):
         self.chat_scroll = scroll
         scroll.setWidgetResizable(True)
         scroll.viewport().installEventFilter(self)
+        scroll.viewport().setAcceptDrops(True)
         scroll.verticalScrollBar().valueChanged.connect(self._on_chat_scrolled)
         scroll.verticalScrollBar().sliderPressed.connect(self._stop_scroll_animation)
         self.scroll_float = QPushButton("回到底部", scroll.viewport())
@@ -850,6 +934,9 @@ class HarnessPage(EnterprisePage):
         self.workflow_card = WorkflowCard()
         self.workflow_card.action_requested.connect(self.workflow_requested)
         flow.addWidget(self.workflow_card)
+        self.chat_run_card = ChatRunCard()
+        self.chat_run_card.action_requested.connect(lambda run_id, _: self.chat_resume_requested.emit(run_id))
+        flow.addWidget(self.chat_run_card)
         self.reply_status = text("", "muted")
         self.reply_status.hide()
         flow.addWidget(self.reply_status)
@@ -892,25 +979,38 @@ class HarnessPage(EnterprisePage):
         from .components import soft_shadow
         soft_shadow(composer_box, blur=34, dy=8, alpha=64)
         box = QVBoxLayout(composer_box)
-        box.setContentsMargins(14, 8, 8, 8)
-        box.setSpacing(2)
+        box.setContentsMargins(12, 12, 12, 10)
+        box.setSpacing(6)
         self.composer = Composer()
         self.composer.setObjectName("composer")
-        self.composer.setPlaceholderText("对源镜团队说点什么…")
+        self.composer.setPlaceholderText("说点什么，或拖入图片、视频、文档…")
         self.composer.submitted.connect(self._generate)
+        from .attachments import AttachmentTray
+        self.attachment_tray = AttachmentTray()
+        self.attachment_tray.error.connect(self.notice)
+        self.composer.files_added.connect(self.attachment_tray.add_files)
+        self.composer.image_added.connect(self._stage_clipboard_image)
+        box.addWidget(self.attachment_tray)
         input_row = QHBoxLayout()
         input_row.setContentsMargins(0, 0, 0, 0)
         input_row.setSpacing(8)
         input_row.addWidget(self.composer, 1)
-        input_row.addWidget(self.generate_button, 0, Qt.AlignmentFlag.AlignVCenter)
         box.addLayout(input_row)
         row = QHBoxLayout()
+        self.attach_button = QPushButton("+")
+        self.attach_button.setObjectName("attachButton")
+        self.attach_button.setFixedSize(30, 30)
+        self.attach_button.setAccessibleName("添加附件")
+        self.attach_button.setToolTip("图片、视频、PDF、Word、表格、演示文稿及文本；也可直接拖入或粘贴文件")
+        self.attach_button.clicked.connect(self._choose_attachments)
+        row.addWidget(self.attach_button)
         self.force.hide()
         self.plan_button = QPushButton("生成方案")
         self.plan_button.setObjectName("linkButton")
         self.plan_button.clicked.connect(self._request_plan)
         row.addWidget(self.plan_button)
         row.addStretch()
+        row.addWidget(self.generate_button)
         box.addLayout(row)
         main.addWidget(composer_box)
         # 圆角面板外面再包一层同色外壳：四个角的弧形区域本来会露出窗口底色，
@@ -1032,10 +1132,41 @@ class HarnessPage(EnterprisePage):
 
     def _generate(self):
         request = self.composer.toPlainText().strip()
+        if not request and self.attachment_tray.paths:
+            request = "请阅读并分析这些附件，概括主要内容与需要注意的问题。"
         if not request or len(request) > 6000:
             self.notice.emit("请填写本次需求（不超过6000字）")
             return
         self.task_requested.emit(request, False)
+
+    def _choose_attachments(self):
+        from ..attachments import FILE_FILTER
+        files, _ = QFileDialog.getOpenFileNames(self, "添加附件", "", FILE_FILTER)
+        self.attachment_tray.add_files(files)
+
+    def _stage_clipboard_image(self, image):
+        from PySide6.QtGui import QImage, QPixmap
+        from pathlib import Path
+        import tempfile
+        import uuid
+        if isinstance(image, QPixmap):
+            image = image.toImage()
+        if not isinstance(image, QImage) or image.isNull():
+            self.notice.emit("剪贴板中没有可用图片")
+            return
+        if image.width() * image.height() > 40_000_000:
+            self.notice.emit("图片像素过大，请先缩小后再添加")
+            return
+        if not hasattr(self, "_clipboard_images"):
+            self._clipboard_images = tempfile.TemporaryDirectory(prefix="scout-pasted-images-", ignore_cleanup_errors=True)
+        path = Path(self._clipboard_images.name) / ("截图-" + uuid.uuid4().hex[:8] + ".png")
+        if image.save(str(path), "PNG"):
+            self.attachment_tray.add_files([str(path)])
+        else:
+            self.notice.emit("无法读取剪贴板图片，请保存后拖入")
+
+    def pending_attachment_paths(self):
+        return list(self.attachment_tray.paths)
 
     def _request_plan(self):
         self.task_requested.emit("请根据当前对话、已保存的企业资料及已有数据，生成完整传播方案。缺失事实列为待确认，不要编造。", True)
@@ -1060,10 +1191,26 @@ class HarnessPage(EnterprisePage):
         if not users:
             self.notice.emit("没有可重试的消息")
             return
+        chat = self.chat_run_card.run
+        if chat and chat["request"] == users[-1]["content"] and chat["status"] not in ("complete", "partial"):
+            if chat["status"] == "needs_review":
+                self.notice.emit("请先核对上次操作的实际结果，再提出新的具体要求")
+            else:
+                self.chat_resume_requested.emit(chat["id"])
+            return
         run = self.workflow_card.run
         if run and run["status"] in ("failed", "cancelled", "running", "waiting") and users[-1]["content"] == run["request"]:
             self.workflow_requested.emit(run["id"], False)
             return
+        if users[-1].get("attachments"):
+            from ..attachments import managed_path
+            paths = []
+            for item in users[-1]["attachments"]:
+                if item.get("source_path"):
+                    paths.append(item["source_path"])
+                elif item.get("relative_path"):
+                    paths.append(str(managed_path(self.attachment_paths, item["relative_path"])))
+            self.attachment_tray.add_files(paths)
         self.task_requested.emit(users[-1]["content"], False)
 
     def new_task(self):
@@ -1073,6 +1220,7 @@ class HarnessPage(EnterprisePage):
         self.conversation_id = None
         self.conversation_data = None
         self.workflow_card.apply(None)
+        self.chat_run_card.apply(None)
         self.reasoning_panel = None
         self._rendered_count = 0
         clear_layout(self.transcript_layout)
@@ -1098,6 +1246,7 @@ class HarnessPage(EnterprisePage):
         self.topics_summary.setText("生成后将在右侧显示选题、内容优化与策略。")
         self.review_summary.setText("暂无待复核报告。")
         self.composer.clear()
+        self.attachment_tray.clear()
         self._empty_plan()
         self.report_state.setText("等待新任务")
         self.right_tabs.setCurrentIndex(1)
@@ -1207,6 +1356,7 @@ class HarnessPage(EnterprisePage):
     def set_processing(self, busy, message=""):
         self.processing = busy
         self.workflow_card.apply(self.workflow_card.run, busy)
+        self.chat_run_card.apply(self.chat_run_card.run, busy)
         self.activity.set_running(busy)
         if self.conversation_id is not None or self.conversation_data:
             self._set_reply_status(message or ("模型正在回复…" if busy else ""), busy or bool(message))
@@ -1236,7 +1386,9 @@ class HarnessPage(EnterprisePage):
         self.controls_enabled = enabled
         self.workflow_card.resume.setEnabled(enabled and not self.processing)
         self.workflow_card.rerun.setEnabled(enabled and not self.processing)
-        for widget in (self.force, self.composer, self.save_profile_button,
+        self.chat_run_card.resume.setEnabled(enabled and not self.processing and bool(self.chat_run_card.run)
+                                             and self.chat_run_card.run["status"] != "needs_review")
+        for widget in (self.force, self.composer, self.attach_button, self.attachment_tray, self.save_profile_button,
                        self.save_revision_button, self.export_button, self.metrics_button, self.report_select,
                        self.reason, self.reviewed, self.agent_bar, self.suggestion_row, self.modify_button, self.plan_button):
             widget.setEnabled(enabled)
@@ -1246,9 +1398,12 @@ class HarnessPage(EnterprisePage):
         if self.forms_dialog:
             self.forms_dialog.setEnabled(enabled)
 
-    def append_pending(self, request):
+    def append_pending(self, request, attachment_paths=()):
         messages = list(self.conversation_data["messages"]) if self.conversation_data else []
-        messages.append({"role": "user", "content": request, "status": "pending"})
+        from pathlib import Path
+        attachments = [{"name": Path(p).name, "source_path": p, "size": Path(p).stat().st_size, "status": "processing"}
+                       for p in attachment_paths if Path(p).is_file()]
+        messages.append({"role": "user", "content": request, "status": "pending", "attachments": attachments})
         self._pending_messages = messages
         if self.transcript.isVisible() and self._rendered_count == len(messages) - 1:
             # 同一会话续聊：只追加新条目，长对话也不再整块重建。
@@ -1263,6 +1418,7 @@ class HarnessPage(EnterprisePage):
             self._render_messages(messages)
         self.begin_reasoning()
         self.composer.clear()
+        self.attachment_tray.clear()
         self._set_reply_status("等待模型回复…", True)
 
     def _set_reply_status(self, text, visible):
@@ -1422,6 +1578,16 @@ class HarnessPage(EnterprisePage):
     def eventFilter(self, watched, event):
         # 窗口拆除阶段可能收到残留事件并访问到已销毁对象，此时静默跳过。
         try:
+            if watched is self.chat_scroll.viewport() and event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop):
+                local_files = [u.toLocalFile() for u in event.mimeData().urls() if u.isLocalFile()] if event.mimeData().hasUrls() else []
+                if local_files or event.mimeData().hasImage():
+                    if event.type() == QEvent.Type.Drop:
+                        if local_files:
+                            self.attachment_tray.add_files(local_files)
+                        else:
+                            self._stage_clipboard_image(event.mimeData().imageData())
+                    event.acceptProposedAction()
+                    return True
             if watched is self.chat_scroll.viewport() and event.type() == QEvent.Type.Resize:
                 # 对话区宽度变化（窗口缩放、分栏拖动）后：气泡重新换行、浮标重新定位。
                 self._bubble_timer.start()
@@ -1485,6 +1651,7 @@ class HarnessPage(EnterprisePage):
         self.task_date.setText("对话创建：" + report_time(data["created_at"]))
         self._render_messages(data["messages"])
         self.workflow_card.apply(data.get("workflow"), self.processing)
+        self.chat_run_card.apply(data.get("chat_run"), self.processing)
         self.reply_status.hide()
         self.conversation_selected.emit(data["id"])
 
@@ -1549,6 +1716,9 @@ class HarnessPage(EnterprisePage):
         toolbar.setVisible(pinned)
         header.addWidget(toolbar)
         block.addLayout(header)
+        if message.get("attachments"):
+            from .attachments import AttachmentGroup
+            block.addWidget(AttachmentGroup(message["attachments"], self.attachment_paths))
         if role == "assistant" and (message.get("reasoning") or "").strip():
             block.addWidget(ReasoningPanel(message["reasoning"].strip(), running=False, motion=self.motion_enabled))
         content = message["content"]

@@ -31,6 +31,11 @@ REM onedir 不再自解压到临时目录；版本信息写进 exe 属性，避�
     --add-data "src/scout/desktop/assets;scout/desktop/assets" ^
     --add-data "src/scout/db/migrations;scout/db/migrations" ^
     --collect-all playwright ^
+    --collect-all imageio_ffmpeg ^
+    --collect-all pypdfium2 ^
+    --collect-all pypdfium2_raw ^
+    --collect-all py7zr ^
+    --collect-all pillow_heif ^
     --exclude-module PySide6.QtWebEngineCore ^
     --exclude-module PySide6.QtWebEngineWidgets ^
     --exclude-module PySide6.QtWebEngineQuick ^

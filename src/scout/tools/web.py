@@ -335,7 +335,7 @@ register(ToolSpec(
     id="web_fetch", name="网页读取",
     description="读取一个公开网页的正文内容。需要查看某个具体链接里写了什么时使用。",
     parameters={"type": "object",
-                "properties": {"url": {"type": "string", "description": "完整网址（http/https）"}},
+                "properties": {"url": {"type": "string", "minLength": 1, "maxLength": 4000, "description": "完整网址（http/https）"}},
                 "required": ["url"]},
     handler=_fetch))
 
@@ -343,7 +343,7 @@ register(ToolSpec(
     id="web_search", name="联网搜索",
     description="联网搜索实时信息（新闻、热点、资料）。需要了解最新信息或不知道具体网址时使用。",
     parameters={"type": "object",
-                "properties": {"query": {"type": "string", "description": "搜索关键词"},
-                               "count": {"type": "integer", "description": "结果数量 1-10，默认 6"}},
+                "properties": {"query": {"type": "string", "minLength": 1, "maxLength": 2000, "description": "搜索关键词"},
+                               "count": {"type": "integer", "minimum": 1, "maximum": 10, "description": "结果数量 1-10，默认 6"}},
                 "required": ["query"]},
     handler=_search))

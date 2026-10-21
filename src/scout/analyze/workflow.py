@@ -94,6 +94,7 @@ async def _execute_workflow(ctx, client, request, conversation_id, *, workflow="
     emit = emit or (lambda event: None)
     store, conversations = Workflows(ctx.db), Conversations(ctx.db)
     account_key = str(ctx.paths.db_path.resolve())
+    original_attachments = []
     if run_id is not None:
         original = store.get(run_id)
         if original["conversation_id"] != conversation_id or original["account_key"] != account_key:
@@ -104,6 +105,7 @@ async def _execute_workflow(ctx, client, request, conversation_id, *, workflow="
         if original["status"] in ("complete", "partial") and not rerun:
             return _result(store, conversations, original["id"], "任务已经完成，可查看成果或按最新数据重做")
         if rerun:
+            original_attachments = original["options"].get("attachments", [])
             run_id = None
         else:
             user_id = original["user_message_id"]
@@ -117,6 +119,8 @@ async def _execute_workflow(ctx, client, request, conversation_id, *, workflow="
         if user_id is None:
             user_id = conversations.add(conversation_id, "user", request, status="pending")
         options = request_options(request)
+        from ..store.attachments import Attachments
+        options["attachments"] = Attachments(ctx.db).list(conversation_id, user_id) or original_attachments
         options["conversation"] = conversations.history(conversation_id)[-6:]
         previous_report = conversations.get(conversation_id).get("report_id")
         if previous_report:
@@ -147,6 +151,10 @@ async def _execute_workflow(ctx, client, request, conversation_id, *, workflow="
         finally:
             store.state(run_id, "running")
             publish()
+
+    from ..llm.tracked import TrackedClient
+    if isinstance(client, TrackedClient):
+        client = client.scoped("workflow", f"workflow:{run_id}")
 
     try:
         store.state(run_id, "running")
@@ -252,6 +260,12 @@ async def _data(ctx, store, run, step, confirm, emit):
             warnings.append(str(report.get("summary") or "采集未完整完成，本次仅使用已取回的数据。"))
         snapshot["collection"] = report
     snapshot["limits"].extend(warnings)
+    from ..store.attachments import Attachments
+    for item in options.get("attachments", []):
+        snapshot["evidence"].append({"id": "F" + item["id"], "kind": "用户上传的附件资料，未经独立核实",
+                                     "data": Attachments.context([item], per_file=6000)})
+        if item["limitations"]:
+            snapshot["limits"].append(item["name"] + "：" + item["limitations"])
     snapshot["partial"] = bool(warnings)
     snapshot["summary"] = f"已冻结本次数据：{snapshot['works_count']} 条作品、{snapshot['audience']['users']} 位有效互动者；{snapshot['scope']}。"
     return snapshot

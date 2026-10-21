@@ -31,14 +31,16 @@ class ConfirmationBroker:
     def new_id(self) -> str:
         return f"confirm-{int(time.time())}-{next(self._counter)}"
 
-    async def ask(self, request_id: str) -> bool:
+    async def ask(self, request_id: str, *, timeout_s=None, ready=None) -> bool:
         """挂起直到用户作答；超时视为拒绝。应在运行对话的事件循环里 await。"""
         loop = asyncio.get_running_loop()
         future: asyncio.Future = loop.create_future()
         with self._lock:
             self._waiters[request_id] = (loop, future)
         try:
-            return bool(await asyncio.wait_for(future, timeout=self.timeout_s))
+            if ready:
+                ready()
+            return bool(await asyncio.wait_for(future, timeout=self.timeout_s if timeout_s is None else timeout_s))
         except asyncio.TimeoutError:
             return False
         finally:
@@ -66,19 +68,22 @@ class ConfirmationBroker:
     def confirmer(self, emit: Callable[[dict], None]):
         """构造 registry.execute 需要的 confirm 回调：先抛事件给界面，再等用户选择。"""
 
-        async def ask_user(spec: ToolSpec, agent_id: str, args: dict[str, Any]) -> bool:
-            request_id = self.new_id()
+        async def ask_user(spec: ToolSpec, agent_id: str, args: dict[str, Any], *, request_id=None, expires_at=None) -> bool:
+            request_id = request_id or self.new_id()
             try:
                 detail = json.dumps(args or {}, ensure_ascii=False)
             except (TypeError, ValueError):
                 detail = str(args)
             if len(detail) > DETAIL_LIMIT:
                 detail = detail[:DETAIL_LIMIT] + "…"
-            emit({"type": "tool", "phase": "confirm", "request_id": request_id,
-                  "tool": spec.id, "name": spec.name, "agent": agent_id, "detail": detail})
-            approved = await self.ask(request_id)
+            def ready():
+                emit({"type": "tool", "phase": "confirm", "request_id": request_id,
+                      "tool": spec.id, "name": spec.name, "agent": agent_id, "detail": detail})
+            timeout = min(self.timeout_s, max(0, expires_at - time.time())) if expires_at else self.timeout_s
+            approved = await self.ask(request_id, timeout_s=timeout, ready=ready)
             emit({"type": "tool", "phase": "confirm_done", "request_id": request_id,
                   "tool": spec.id, "approved": approved})
             return approved
 
+        ask_user.supports_durable = True
         return ask_user

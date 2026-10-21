@@ -163,6 +163,13 @@ QWidget#resultPane { background: $toolbar; }
 QWidget#resultBody { background: $surface; }
 QFrame#composerBox { background: $composer_bg; border: 1px solid $composer_border; border-radius: 24px; }
 QPlainTextEdit#composer { background: transparent; border: none; color: $text; font-size: 13px; padding: 2px 4px; }
+QPushButton#attachButton { background: transparent; border: none; border-radius: 8px; color: $muted; font-size: 25px; padding: 0; font-weight: 300; }
+QPushButton#attachButton:hover { background: $hover; color: $text; }
+QPushButton#attachButton:focus { border: 1px solid $accent; }
+QPushButton#attachmentRemove { background: $surface; color: $text; border: 1px solid $border; border-radius: 10px; padding: 0; font-size: 15px; }
+QPushButton#attachmentRemove:hover { background: $hover; }
+QScrollArea#attachmentTray QScrollBar:horizontal { height: 4px; margin: 0; background: transparent; }
+QScrollArea#attachmentTray QScrollBar::handle:horizontal { background: $scroll; border-radius: 2px; min-width: 24px; }
 QPushButton#sendCircle { background: $accent; border: none; border-radius: 19px; }
 QPushButton#sendCircle:hover { background: $accent_hover; }
 QPushButton#sendCircle:pressed { background: $accent_pressed; }
@@ -197,6 +204,10 @@ QLabel#videoTitle { font-size: 13px; font-weight: 600; color: $text; }
 QLabel#videoStatus { font-size: 11px; color: $muted; }
 QPushButton#videoControl { background: $subtle; border: 1px solid $border; border-radius: 8px; padding: 4px 10px; font-size: 11px; color: $text; }
 QPushButton#videoControl:hover { background: $hover; }
+QDialog#updateDialog { background: $surface; }
+QLabel#updateTitle { font-size: 17px; font-weight: 600; color: $text; }
+QLabel#updateMeta { font-size: 12px; color: $muted; }
+QTextBrowser#updateNotes { background: $subtle; border: 1px solid $border; border-radius: 10px; padding: 10px; color: $text; font-size: 12px; }
 QSlider#videoSlider::groove:horizontal { height: 4px; background: $subtle; border-radius: 2px; }
 QSlider#videoSlider::handle:horizontal { width: 12px; margin: -4px 0; border-radius: 6px; background: $accent; }
 QFrame#choiceCard { background: $surface; border: 1px solid $border; border-radius: 14px; }

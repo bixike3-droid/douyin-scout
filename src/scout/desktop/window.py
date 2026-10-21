@@ -24,6 +24,8 @@ from .jobs import Jobs
 from ..util import local_tz, parse_iso
 from .branding import app_icon
 from .components import MetricCard, TaskSummary, ElidedLabel, AccountAvatar, card, text
+from .update import current_version, fetch_latest, download as download_update, install_dir, launch_updater, is_newer
+from .update_dialog import UpdateDialog
 from .theme import apply_theme, icon
 from .appearance import THEMES, color
 from .operations import Operations
@@ -450,6 +452,8 @@ class MainWindow(QMainWindow):
         self.media_jobs.succeeded.connect(self._video_ready)
         self.image_jobs = Jobs(self)
         self.image_jobs.succeeded.connect(self._images_ready)
+        self.update_jobs = Jobs(self)
+        self.update_jobs.succeeded.connect(self._updates_ready)
         self.jobs.succeeded.connect(self._result)
         self.jobs.failed.connect(self._error)
         self.jobs.busy_changed.connect(self._busy)
@@ -634,11 +638,12 @@ class MainWindow(QMainWindow):
         body.addWidget(content_widget, 1)
         root_layout.addLayout(body, 1)
         self.setCentralWidget(root)
-        self.enterprise = HarnessPage()
+        self.enterprise = HarnessPage(self.service.paths)
         self.enterprise.set_motion(self.motion_enabled)
         self.enterprise.task_requested.connect(self._submit_enterprise_task)
         self.enterprise.cancel_requested.connect(self._cancel_chat)
         self.enterprise.workflow_requested.connect(self._submit_workflow)
+        self.enterprise.chat_resume_requested.connect(self._resume_chat)
         self.enterprise.navigate_requested.connect(self._navigate_key)
         self.enterprise.history_changed.connect(self._update_recent_tasks)
         self.enterprise.report_selected.connect(self._highlight_recent_task)
@@ -850,6 +855,24 @@ class MainWindow(QMainWindow):
         self.motion_toggle.checkedChanged.connect(self._set_motion)
         motion_layout.addWidget(self.motion_toggle)
         layout.addWidget(motion_card)
+        update_card, update_layout = card("版本与更新", "启动时会静默检查一次新版本；也可以随时手动检查。")
+        update_card.setMaximumWidth(800)
+        version_row = QHBoxLayout()
+        version_row.setSpacing(10)
+        self.version_label = text(f"当前版本 v{current_version()}", "sectionTitle")
+        version_row.addWidget(self.version_label, 1)
+        self.check_update_button = QPushButton("检查更新")
+        set_fluent_icon(self.check_update_button, "SYNC")
+        self.check_update_button.clicked.connect(lambda: self._check_updates(manual=True))
+        version_row.addWidget(self.check_update_button)
+        update_layout.addLayout(version_row)
+        self.update_state = text("", "muted")
+        update_layout.addWidget(self.update_state)
+        self.update_auto = switch("启动时自动检查更新")
+        self.update_auto.setChecked(self._auto_check_enabled())
+        self.update_auto.checkedChanged.connect(self._set_auto_check)
+        update_layout.addWidget(self.update_auto)
+        layout.addWidget(update_card)
         layout.setSpacing(20)
         layout.addStretch()
         scroll = smooth_scroll_area()
@@ -1005,6 +1028,10 @@ class MainWindow(QMainWindow):
             self.enterprise.conversation_id = event["conversation_id"]
         if event.get("type") == "workflow":
             self.enterprise.workflow_card.apply(event["workflow"], self.operations.busy)
+            self.enterprise._scroll_chat_bottom(smooth=False)
+            return
+        if event.get("type") == "chat_run":
+            self.enterprise.chat_run_card.apply(event["chat_run"], self.operations.busy)
             self.enterprise._scroll_chat_bottom(smooth=False)
             return
         if event.get("type") == "thinking":
@@ -1211,13 +1238,26 @@ class MainWindow(QMainWindow):
         if not self.has_key:
             self.enterprise.show_chat_error("尚未配置模型密钥。请在设置的“模型与外观”中保存 DeepSeek Key，再发送消息。")
             return
-        self.enterprise.append_pending(request)
-        self._start_operation("chat", {"request": request, "conversation_id": self.enterprise.conversation_id, "want_plan": force})
+        attachment_paths = self.enterprise.pending_attachment_paths()
+        self.enterprise.append_pending(request, attachment_paths)
+        self._start_operation("chat", {"request": request, "conversation_id": self.enterprise.conversation_id,
+                                       "want_plan": force, "attachment_paths": attachment_paths})
 
     def _cancel_chat(self):
         if self.operations.busy:
             self.operations.cancel()
             self.statusBar().showMessage("正在停止…")
+
+    def _resume_chat(self, run_id):
+        if self.operations.busy or self.jobs.busy or not self.enterprise.conversation_id or not self.has_key:
+            return
+        run = self.enterprise.chat_run_card.run
+        if not run or run["id"] != run_id or run["status"] == "needs_review":
+            return
+        self.enterprise.set_processing(True, "正在继续未完成任务…")
+        self.enterprise.begin_reasoning()
+        self._start_operation("chat", {"request": run["request"], "conversation_id": self.enterprise.conversation_id,
+                                       "chat_run_id": run_id})
 
     def _submit_workflow(self, run_id, rerun):
         if self.closing or not self.initialized or self.jobs.busy or self.operations.busy:
@@ -1322,6 +1362,7 @@ class MainWindow(QMainWindow):
             self.enterprise.conversation_id = None
             self.enterprise.conversation_data = None
             self.enterprise.workflow_card.apply(None)
+            self.enterprise.chat_run_card.apply(None)
             self._request_enterprise_report(record_id)
 
     def _highlight_recent_task(self, report_id):
@@ -1474,6 +1515,98 @@ class MainWindow(QMainWindow):
     def _avatar_ready(self, path):
         if path:
             self.side_avatar.set_image(path)
+
+    # ── 更新检查 ────────────────────────────────────────────
+    AUTO_CHECK_KEY = "autoCheckUpdate"
+    SKIP_VERSION_KEY = "skippedVersion"
+
+    def _auto_check_enabled(self) -> bool:
+        try:
+            return str(self.ui_preferences.value(self.AUTO_CHECK_KEY, "true")).lower() != "false"
+        except Exception:      # noqa: BLE001
+            return True
+
+    def _set_auto_check(self, checked):
+        try:
+            self.ui_preferences.setValue(self.AUTO_CHECK_KEY, "true" if checked else "false")
+        except Exception:      # noqa: BLE001
+            pass
+
+    def _startup_update_check(self):
+        if self._auto_check_enabled():
+            self._check_updates(manual=False)
+
+    def _check_updates(self, manual: bool = False):
+        if getattr(self, "update_jobs", None) is None or self.update_jobs.busy:
+            return
+        self._manual_update_check = manual
+        self.check_update_button.setEnabled(False)
+        self.update_state.setText("正在检查更新…" if manual else "")
+        self.update_jobs.submit(lambda: ("check", fetch_latest()))
+
+    def _updates_ready(self, result):
+        kind, payload = result
+        if kind == "check":
+            self.check_update_button.setEnabled(True)
+            if payload is None:
+                self.update_state.setText("检查失败：无法连接更新服务器")
+                if getattr(self, "_manual_update_check", False):
+                    notify(self, "检查更新失败", "网络不可用或无法访问 GitHub", "warning")
+                return
+            remote = str(payload.get("version") or "")
+            if not is_newer(remote):
+                self.update_state.setText(f"已是最新版本 v{current_version()}")
+                if getattr(self, "_manual_update_check", False):
+                    notify(self, "已是最新版本", f"当前 v{current_version()}", "success")
+                return
+            skipped = str(self.ui_preferences.value(self.SKIP_VERSION_KEY, "") or "").lstrip("vV")
+            if not getattr(self, "_manual_update_check", False) and skipped == remote:
+                self.update_state.setText(f"已跳过 v{remote}")
+                return
+            self.update_state.setText(f"发现新版本 v{remote}")
+            self._show_update_dialog(payload)
+            return
+        if kind == "download":
+            dialog = getattr(self, "_update_dialog", None)
+            if not payload:
+                if dialog is not None:
+                    dialog.download_failed("下载失败，请稍后重试，或到发布页手动下载")
+                return
+            folder = install_dir()
+            if folder is None:
+                if dialog is not None:
+                    dialog.download_failed("源码运行模式不支持自动替换，请到发布页下载新版本")
+                return
+            if launch_updater(Path(str(payload)), folder):
+                if dialog is not None:
+                    dialog.set_progress("更新包已就绪，程序即将退出并自动完成安装…")
+                QTimer.singleShot(1200, self.close)
+            elif dialog is not None:
+                dialog.download_failed("无法启动更新脚本，请到发布页手动下载")
+
+    def _show_update_dialog(self, info: dict):
+        dialog = UpdateDialog(info, current_version(), self)
+        dialog.update_requested.connect(lambda: self._download_update(info))
+        dialog.skip_requested.connect(lambda: self._skip_version(info))
+        dialog.open_page_requested.connect(lambda: QDesktopServices.openUrl(QUrl(str(info.get("page") or ""))))
+        self._update_dialog = dialog
+        dialog.finished.connect(lambda _=0: setattr(self, "_update_dialog", None))
+        dialog.exec()
+
+    def _skip_version(self, info: dict):
+        try:
+            self.ui_preferences.setValue(self.SKIP_VERSION_KEY, str(info.get("version") or ""))
+        except Exception:      # noqa: BLE001
+            pass
+        self.update_state.setText(f"已跳过 v{info.get('version')}")
+
+    def _download_update(self, info: dict):
+        target = self.service.paths.root / "updates" / f"yuanjing-{info.get('version')}.zip"
+        if getattr(self, "update_jobs", None) is None or self.update_jobs.busy:
+            return
+        self.update_jobs.submit(
+            lambda: ("download", str(target)) if download_update(str(info.get("zip_url") or ""), target) else ("download", "")
+        )
 
     # ── 视频播放与缓存 ───────────────────────────────────────
     VIDEO_CACHE_KEY = "videoCacheMb"

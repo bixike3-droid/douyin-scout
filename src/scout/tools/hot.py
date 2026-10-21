@@ -54,7 +54,7 @@ register(ToolSpec(
     parameters={"type": "object",
                 "properties": {"platform": {"type": "string", "enum": ["douyin"],
                                             "description": "平台，目前仅支持 douyin"},
-                               "limit": {"type": "integer", "description": "条数 1-20，默认 10"}},
+                               "limit": {"type": "integer", "minimum": 1, "maximum": 20, "description": "条数 1-20，默认 10"}},
                 "required": []},
     agents=("observer", "strategy"),  # 观察员主场；策略师做选题时需要榜单依据
     handler=_hot))

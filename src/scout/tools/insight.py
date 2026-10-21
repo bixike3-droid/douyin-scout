@@ -171,7 +171,7 @@ register(ToolSpec(
     description="按发布时间对比近期与上一周期的作品表现（播放/点赞/评论/分享/收藏的环比与均值），"
                 "并列出近期表现最好的几条。用户问「最近数据怎么样/涨了还是跌了」时使用。",
     parameters={"type": "object",
-                "properties": {"days": {"type": "integer", "description": "对比周期天数，1-180，默认 30"},
+                "properties": {"days": {"type": "integer", "minimum": 1, "maximum": 180, "description": "对比周期天数，1-180，默认 30"},
                                "metric": {"type": "string", "enum": list(TREND_METRICS),
                                           "description": "关注指标，默认 play_count"}}},
     agents=("content", "review", "steward"), level="read",

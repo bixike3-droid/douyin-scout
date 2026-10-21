@@ -58,7 +58,7 @@ register(ToolSpec(
     description="打开浏览器引导用户扫码登录抖音，登录态会保存，之后采集和查数据都用它。"
                 "当数据概览显示尚未识别账号、或采集提示登录态失效时使用。执行前会先让用户确认。",
     parameters={"type": "object",
-                "properties": {"timeout_s": {"type": "integer",
+                "properties": {"timeout_s": {"type": "integer", "minimum": 60, "maximum": 600,
                                              "description": "等待扫码的秒数，60-600，默认 300"}}},
     agents=("data",), level="confirm",
     handler=_login))
@@ -86,7 +86,7 @@ register(ToolSpec(
     description="采集指定作品的评论区（需要登录态），入库后可按点赞排序查看。"
                 "用户想了解观众反馈、评论倾向时使用；执行前会先让用户确认，会打开浏览器跑几十秒。",
     parameters={"type": "object",
-                "properties": {"aweme_id": {"type": "string",
+                "properties": {"aweme_id": {"type": "string", "minLength": 1, "maxLength": 200,
                                             "description": "作品标识，先用 records_search 查出来"}},
                 "required": ["aweme_id"]},
     agents=("data", "audience"), level="confirm",
@@ -99,7 +99,7 @@ register(ToolSpec(
     parameters={"type": "object",
                 "properties": {"kinds": {"type": "string", "enum": ["quick", "deep"],
                                          "description": "quick=快速（默认）｜deep=深度（补充资料）"},
-                               "limit": {"type": "integer",
+                               "limit": {"type": "integer", "minimum": 5, "maximum": 200,
                                          "description": "本轮最多处理多少个任务，5-200，默认 40"},
                                "force": {"type": "boolean",
                                          "description": "true=忽略缓存强制重采，默认 false"}}},

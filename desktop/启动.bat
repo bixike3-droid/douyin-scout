@@ -55,7 +55,7 @@ if not exist ".venv\Scripts\python.exe" (
 )
 
 REM 已有开发环境也需要补齐桌面依赖。
-.venv\Scripts\python.exe -c "from PySide6 import QtWidgets, __version__; assert __version__ == '6.8.3'" >nul 2>&1
+.venv\Scripts\python.exe -c "from PySide6 import QtWidgets, __version__; import PIL, pypdf, pypdfium2, imageio_ffmpeg, py7zr, rarfile, striprtf, xlrd, pillow_heif; assert __version__ == '6.8.3'" >nul 2>&1
 if errorlevel 1 (
     .venv\Scripts\python.exe -m pip install --quiet -e ".[desktop]" -i https://pypi.tuna.tsinghua.edu.cn/simple
     if errorlevel 1 (
