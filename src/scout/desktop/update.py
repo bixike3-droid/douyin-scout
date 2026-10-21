@@ -3,8 +3,11 @@
 设计取舍：
 - 只在**打包后的 exe** 里启用；源码运行时只提示版本，不做自动替换。
 - 网络请求 6 秒超时，失败静默（不能因为查更新拖慢启动）。
-- 更新动作由外部脚本完成：程序退出后用 PowerShell 解压覆盖再重启，
+- 更新动作由外部脚本完成：程序退出后用批处理解压覆盖再重启，
   因为运行中的 exe 在 Windows 上无法自我覆盖。
+- 刻意**不用 PowerShell**（尤其不用 Hidden + ExecutionPolicy Bypass + 自删除），
+  那套组合是杀软判定「脚本化下载器」的典型特征，会直接把程序当木马清掉。
+  改用 .cmd + 系统自带 tar，窗口可见，行为对用户透明。
 """
 from __future__ import annotations
 
@@ -156,30 +159,53 @@ def install_dir() -> Path | None:
     return Path(sys.executable).resolve().parent
 
 
+def _updater_script(archive: Path, target: Path, stage: Path) -> str:
+    """生成更新批处理内容（逻辑全 ASCII，避免代码页问题）。"""
+    unzip = stage / "unzip"
+    lines = [
+        "@echo off",
+        "title Yuanjing updater",
+        "echo Installing Yuanjing update, please wait...",
+        "echo.",
+        "timeout /t 3 /nobreak >nul",
+        'cd /d "%~dp0"',
+        f'if exist "{unzip}" rmdir /s /q "{unzip}"',
+        f'mkdir "{unzip}" 2>nul',
+        f'tar -xf "{archive}" -C "{unzip}"',
+        "if errorlevel 1 goto fail",
+        'set "SRC="',
+        'for /f "delims=" %%f in (\'dir /b /s "unzip\\*.exe" 2^>nul\') do if not defined SRC (set "SRC=%%~dpf" & set "APPEXE=%%f")',
+        'if not defined SRC set "SRC=unzip\\"',
+        f'echo Copying files to "{target}" ...',
+        'xcopy "%SRC%*" "' + str(target) + '\\" /E /Y /I >nul',
+        "if errorlevel 1 goto fail",
+        'for %%f in ("%APPEXE%") do set "EXENAME=%%~nxf"',
+        'if not defined EXENAME set "EXENAME=' + EXE_NAME + '"',
+        f'echo Starting "{target}\\%EXENAME%" ...',
+        'start "" "' + str(target) + '\\%EXENAME%"',
+        "exit /b 0",
+        ":fail",
+        "echo.",
+        "echo Update failed. Please unzip the downloaded file manually.",
+        "pause",
+        "exit /b 1",
+        "",
+    ]
+    return "\r\n".join(lines)
+
+
 def launch_updater(archive: Path, target: Path) -> bool:
-    """写一个后台脚本：等本进程退出 → 解压覆盖 → 重启。"""
+    """写一个可见的批处理：等本进程退出 → 解压覆盖 → 重启。"""
     if os.name != "nt":
         return False
     stage = Path(tempfile.mkdtemp(prefix="yuanjing-update-"))
-    script = stage / "apply_update.ps1"
-    script.write_text(
-        "$ErrorActionPreference = 'Continue'\r\n"
-        "Start-Sleep -Seconds 3\r\n"
-        f"Expand-Archive -LiteralPath '{archive}' -DestinationPath '{stage / 'unzip'}' -Force\r\n"
-        "$src = Join-Path '{stage}' 'unzip'\r\n"
-        "$inner = Join-Path $src '源镜'\r\n"
-        "if (Test-Path $inner) { $src = $inner }\r\n"
-        f"robocopy $src '{target}' /E /NFL /NDL /NJH /NJS /NP | Out-Null\r\n"
-        f"Start-Process -FilePath (Join-Path '{target}' '{EXE_NAME}')\r\n"
-        "Remove-Item -LiteralPath $MyInvocation.MyCommand.Path -Force -ErrorAction SilentlyContinue\r\n",
-        encoding="utf-8-sig",
-    )
+    script = stage / "apply_update.cmd"
     try:
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File", str(script)],
-            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            close_fds=True,
-        )
+        script.write_text(_updater_script(archive, target, stage), encoding="mbcs")
+    except (LookupError, UnicodeEncodeError):
+        script.write_text(_updater_script(archive, target, stage), encoding="utf-8", errors="replace")
+    try:
+        subprocess.Popen(["cmd", "/c", str(script)], close_fds=True)
         return True
     except OSError:
         return False

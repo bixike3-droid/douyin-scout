@@ -7,6 +7,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import uuid
 from xml.etree import ElementTree as ET
@@ -100,9 +101,28 @@ def _image(source, output, *, edge=1600, crop=None):
         return {"width": original[0], "height": original[1], "preview_width": image.width, "preview_height": image.height}
 
 
+def ffmpeg_exe() -> str:
+    """返回可用的 ffmpeg 路径。
+
+    优先用系统已装的 ffmpeg，其次用可选的 imageio-ffmpeg。
+    发布包里**不再捆绑** imageio 的 ffmpeg.exe（83MB，国内杀软误报重灾区），
+    所以这里必须能优雅地缺失。
+    """
+    found = shutil.which("ffmpeg")
+    if found:
+        return found
+    try:
+        from imageio_ffmpeg import get_ffmpeg_exe
+        return get_ffmpeg_exe()
+    except Exception:                       # noqa: BLE001
+        raise RuntimeError(
+            "未找到 ffmpeg。视频附件解析需要本机安装 ffmpeg（并加入 PATH），"
+            "或执行 pip install imageio-ffmpeg。"
+        ) from None
+
+
 def _run_ffmpeg(arguments, timeout=25):
-    from imageio_ffmpeg import get_ffmpeg_exe
-    return subprocess.run([get_ffmpeg_exe(), "-hide_banner", "-nostdin", "-protocol_whitelist", "file,pipe", *arguments],
+    return subprocess.run([ffmpeg_exe(), "-hide_banner", "-nostdin", "-protocol_whitelist", "file,pipe", *arguments],
                           capture_output=True, timeout=timeout,
                           creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
 
@@ -247,7 +267,11 @@ def extract(paths, item, *, archive_depth=0):
         _image(source, output)
         visuals = [{"path": output, "label": "上传图片（动画只读取第一帧）"}]
     elif ext in VIDEOS:
-        text, visuals, note = _video(source, directory)
+        try:
+            text, visuals, note = _video(source, directory)
+        except RuntimeError as exc:
+            return {"text": f"文件：{item['name']}\n大小：{source.stat().st_size} 字节\n（视频画面未解析）",
+                    "visuals": [], "limitations": f"{exc}原件已保存，可直接用播放器查看。", "status": "partial"}
     elif ext == ".pdf":
         text, visuals, note = _pdf(source, directory)
     elif ext in ARCHIVES:
