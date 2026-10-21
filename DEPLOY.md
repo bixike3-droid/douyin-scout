@@ -80,3 +80,64 @@ sudo certbot --nginx -d douyin.baodaoxiaoyuan.cn
 - 对象存储（阿里云 OSS / 腾讯云 COS）+ CDN：既能放页面，也能放 zip，国内速度最好
 
 安装包体积约 80MB，放对象存储时建议开 CDN 并设置 `Content-Disposition: attachment`。
+
+
+## 六、程序内更新（自建版本源）
+
+程序启动后 6 秒会请求一次：
+
+```
+https://douyin.baodaoxiaoyuan.cn/update/version.json
+```
+
+它只做三件事：读这个 JSON、和本地版本号比大小、发现新版就弹窗。**不上传任何数据**。
+这个地址读不到时会回退 GitHub API；两边都不通就静默跳过，不影响使用。
+
+### 目录约定
+
+```
+/var/www/douyin/
+  update/
+    version.json
+  download/
+    yuanjing-0.9.1-windows-x64.zip
+```
+
+### nginx 追加
+
+```nginx
+location /update/ {
+    alias /var/www/douyin/update/;
+    add_header Cache-Control "no-store";
+    default_type application/json;
+}
+```
+
+### version.json 格式
+
+```json
+{
+  "version": "0.9.1",
+  "name": "v0.9.1",
+  "published_at": "2026-10-21",
+  "zip_url": "https://douyin.baodaoxiaoyuan.cn/download/yuanjing-0.9.1-windows-x64.zip",
+  "size": 99868601,
+  "sha256": "54b11fbe7cd2ce7a7ead47effa4ec66ba48c6b59d404c141976aa1244581bc17",
+  "notes": "## v0.9.1\n\n- 更新内容……",
+  "page": "https://douyin.baodaoxiaoyuan.cn/",
+  "prerelease": false
+}
+```
+
+程序会用 `sha256` 校验下载到的 zip，不一致直接丢弃（防中间人被替换）。
+
+### 发新版本的完整流程
+
+```powershell
+# 本地：打 zip 后生成 version.json（自动算 size / sha256）
+.venv\Scripts\python.exe scripts\publish_update.py dist\yuanjing-0.9.2-windows-x64.zip --version 0.9.2 --notes notes.md
+
+# 上传两样东西
+scp dist\yuanjing-0.9.2-windows-x64.zip admin@139.224.200.6:/var/www/douyin/download/
+scp dist\update\version.json        admin@139.224.200.6:/var/www/douyin/update/version.json
+```
