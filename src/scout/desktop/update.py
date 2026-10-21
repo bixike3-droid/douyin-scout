@@ -19,6 +19,8 @@ from urllib.request import Request, urlopen
 
 REPO = "bixike3-droid/douyin-scout"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
+# 自建版本源优先：发布方在服务器上放一个 JSON，国内访问比 GitHub 稳定得多
+FEED_URL = "https://douyin.baodaoxiaoyuan.cn/update/version.json"
 PAGE = f"https://github.com/{REPO}/releases"
 _HEADERS = {"User-Agent": "yuanjing-updater", "Accept": "application/vnd.github+json"}
 
@@ -47,15 +49,33 @@ def is_newer(remote: str, local: str | None = None) -> bool:
     return parse_version(remote) > parse_version(local or current_version())
 
 
-def fetch_latest(timeout: float = 6.0) -> dict | None:
-    """读最新 Release；网络不通返回 None（调用方静默处理）。"""
+def _read_json(url: str, timeout: float) -> dict | None:
     try:
-        with urlopen(Request(API_LATEST, headers=_HEADERS), timeout=timeout) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        with urlopen(Request(url, headers=_HEADERS), timeout=timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
     except (URLError, OSError, ValueError):
         return None
+
+
+def _from_feed(payload: dict) -> dict:
+    """自建 version.json 的字段映射（字段名保持简单，方便手工维护）。"""
+    return {
+        "version": str(payload.get("version") or "").lstrip("vV"),
+        "name": payload.get("name") or f"v{payload.get('version', '')}",
+        "notes": payload.get("notes") or "",
+        "page": payload.get("page") or FEED_URL,
+        "zip_url": payload.get("zip_url") or "",
+        "zip_size": int(payload.get("size") or 0),
+        "sha256": str(payload.get("sha256") or "").lower(),
+        "prerelease": bool(payload.get("prerelease")),
+        "source": "feed",
+    }
+
+
+def _from_github(payload: dict) -> dict:
     assets = payload.get("assets") or []
     zip_asset = next((item for item in assets if str(item.get("name", "")).endswith(".zip")), None)
+    digest = str((zip_asset or {}).get("digest") or "")
     return {
         "version": str(payload.get("tag_name") or "").lstrip("vV"),
         "name": payload.get("name") or payload.get("tag_name") or "",
@@ -63,11 +83,24 @@ def fetch_latest(timeout: float = 6.0) -> dict | None:
         "page": payload.get("html_url") or PAGE,
         "zip_url": (zip_asset or {}).get("browser_download_url", ""),
         "zip_size": int((zip_asset or {}).get("size") or 0),
+        "sha256": digest.replace("sha256:", "").lower(),
         "prerelease": bool(payload.get("prerelease")),
+        "source": "github",
     }
 
 
-def download(url: str, dest: Path, timeout: float = 60.0) -> bool:
+def fetch_latest(timeout: float = 6.0) -> dict | None:
+    """先读自建版本源，失败再回退 GitHub；都失败返回 None（界面静默处理）。"""
+    payload = _read_json(FEED_URL, timeout)
+    if isinstance(payload, dict) and payload.get("version"):
+        return _from_feed(payload)
+    payload = _read_json(API_LATEST, timeout)
+    if isinstance(payload, dict):
+        return _from_github(payload)
+    return None
+
+
+def download(url: str, dest: Path, timeout: float = 60.0, sha256: str = "") -> bool:
     if not url:
         return False
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -85,6 +118,12 @@ def download(url: str, dest: Path, timeout: float = 60.0) -> bool:
         if total < 1024:
             part.unlink(missing_ok=True)
             return False
+        if sha256:
+            import hashlib
+            digest = hashlib.sha256(part.read_bytes()).hexdigest()
+            if digest.lower() != sha256.lower():
+                part.unlink(missing_ok=True)
+                return False
         part.replace(dest)
         return True
     except (URLError, OSError):

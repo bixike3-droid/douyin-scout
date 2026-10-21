@@ -1605,7 +1605,9 @@ class MainWindow(QMainWindow):
         if getattr(self, "update_jobs", None) is None or self.update_jobs.busy:
             return
         self.update_jobs.submit(
-            lambda: ("download", str(target)) if download_update(str(info.get("zip_url") or ""), target) else ("download", "")
+            lambda: ("download", str(target))
+            if download_update(str(info.get("zip_url") or ""), target, sha256=str(info.get("sha256") or ""))
+            else ("download", "")
         )
 
     # ── 视频播放与缓存 ───────────────────────────────────────
