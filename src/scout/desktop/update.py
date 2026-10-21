@@ -19,8 +19,13 @@ from urllib.request import Request, urlopen
 
 REPO = "bixike3-droid/douyin-scout"
 API_LATEST = f"https://api.github.com/repos/{REPO}/releases/latest"
-# 自建版本源优先：发布方在服务器上放一个 JSON，国内访问比 GitHub 稳定得多
-FEED_URL = "https://douyin.baodaoxiaoyuan.cn/update/version.json"
+# 自建版本源优先：发布方在服务器上放一个 JSON，国内访问比 GitHub 稳定得多。
+# 先 http 再 https：站点目前没有证书，https 会直接连不上；两个都失败才回退 GitHub。
+FEED_URLS = (
+    "http://douyin.baodaoxiaoyuan.cn/update/version.json",
+    "https://douyin.baodaoxiaoyuan.cn/update/version.json",
+)
+FEED_URL = FEED_URLS[0]
 PAGE = f"https://github.com/{REPO}/releases"
 _HEADERS = {"User-Agent": "yuanjing-updater", "Accept": "application/vnd.github+json"}
 
@@ -90,10 +95,23 @@ def _from_github(payload: dict) -> dict:
 
 
 def fetch_latest(timeout: float = 6.0) -> dict | None:
-    """先读自建版本源，失败再回退 GitHub；都失败返回 None（界面静默处理）。"""
-    payload = _read_json(FEED_URL, timeout)
-    if isinstance(payload, dict) and payload.get("version"):
-        return _from_feed(payload)
+    """读自建版本源（http/https 都试），失败再回退 GitHub；都失败返回 None。"""
+    for url in FEED_URLS:
+        payload = _read_json(url, timeout)
+        if isinstance(payload, dict) and payload.get("version"):
+            info = _from_feed(payload)
+            # 下载地址统一按「版本源所在协议」走：站点没有证书时别把 https 带进来
+            base = url.split("/update/")[0]
+            zip_url = str(info.get("zip_url") or "")
+            if zip_url.startswith("/"):
+                zip_url = base + zip_url
+            elif zip_url.startswith(base.split("://")[1]):
+                zip_url = base.split("://")[0] + "://" + zip_url.split("://", 1)[1]
+            elif zip_url.startswith("https://" + base.split("://")[1].split("/")[0]):
+                zip_url = "http://" + zip_url[len("https://"):]
+            info["zip_url"] = zip_url
+            info["feed_url"] = url
+            return info
     payload = _read_json(API_LATEST, timeout)
     if isinstance(payload, dict):
         return _from_github(payload)
