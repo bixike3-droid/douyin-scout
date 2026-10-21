@@ -18,7 +18,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -176,6 +176,12 @@ class DeepSeekClient:
     @property
     def endpoint(self) -> str:
         return self.cfg.base_url.rstrip("/") + "/chat/completions"
+
+    def for_vision(self):
+        from urllib.parse import urlparse
+        configured = getattr(self.cfg, "vision_model", "")
+        model = configured or ("deepseek-flash" if urlparse(self.cfg.base_url).hostname == "api.deepseek.com" else self.cfg.model)
+        return self if model == self.cfg.model else DeepSeekClient(replace(self.cfg, model=model))
 
     async def chat(
         self,
@@ -358,7 +364,7 @@ class DeepSeekClient:
             {"type": "text", "text": prompt},
             {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{inline}"}},
         ]}]
-        return await self.chat_messages(system or "你是严谨的数据录入助手，只输出 JSON。", messages,
+        return await self.for_vision().chat_messages(system or "你是严谨的数据录入助手，只输出 JSON。", messages,
                                         json_mode=True, max_tokens=max_tokens, temperature=0.0)
 
     async def ping(self) -> dict:

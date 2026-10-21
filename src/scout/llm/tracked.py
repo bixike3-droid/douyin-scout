@@ -5,6 +5,7 @@ import json
 import time
 
 from ..util import iso
+_UNSET = object()
 
 
 class TrackedClient:
@@ -13,10 +14,14 @@ class TrackedClient:
         self.purpose, self.run_ref = purpose, run_ref
         self.max_calls = max_calls
 
-    def scoped(self, purpose, run_ref=None, max_calls=None):
+    def scoped(self, purpose, run_ref=None, max_calls=_UNSET):
         return TrackedClient(self.client, self.db, self.conversation_id, purpose,
                              self.run_ref if run_ref is None else run_ref,
-                             self.max_calls if max_calls is None else max_calls)
+                             self.max_calls if max_calls is _UNSET else max_calls)
+
+    def for_vision(self):
+        client = self.client.for_vision() if hasattr(self.client, "for_vision") else self.client
+        return TrackedClient(client, self.db, self.conversation_id, self.purpose, self.run_ref, self.max_calls)
 
     async def chat(self, system, user, **kwargs):
         return await self._call("chat", system, user, **kwargs)
@@ -25,12 +30,12 @@ class TrackedClient:
         return await self._call("chat_messages", system, messages, **kwargs)
 
     async def _call(self, method, system, body, **kwargs):
-        if self.max_calls is not None and self.run_ref.startswith("chat:"):
+        if self.run_ref.startswith("chat:"):
             from ..store.chat import ChatRuns
             runs = ChatRuns(self.db)
             run_id = int(self.run_ref.split(":", 1)[1])
             run = runs.get(run_id)
-            if run["model_calls"] >= self.max_calls:
+            if self.max_calls is not None and run["model_calls"] >= self.max_calls:
                 raise ValueError("本次模型调用次数已达上限")
             runs.update(run_id, model_calls=run["model_calls"] + 1)
         started, reply, status = time.monotonic(), None, "failed"
@@ -50,7 +55,7 @@ class TrackedClient:
                 "INSERT INTO model_calls(conversation_id,run_ref,purpose,prompt_version,input_digest,"
                 "model,prompt_tokens,completion_tokens,duration_ms,retries,status,created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
                 (self.conversation_id, self.run_ref, self.purpose, digest(system), digest(payload),
-                 reply.model if reply else "", reply.prompt_tokens if reply else 0,
+                 reply.model if reply else getattr(getattr(self.client, "cfg", None), "model", ""), reply.prompt_tokens if reply else 0,
                  reply.completion_tokens if reply else 0,
                  reply.duration_ms if reply and reply.duration_ms else int((time.monotonic() - started) * 1000),
                  reply.retries if reply else 0, status, iso()))

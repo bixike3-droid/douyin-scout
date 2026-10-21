@@ -86,7 +86,7 @@ class ChatRuns:
         self.db.execute("UPDATE chat_invocations SET " + ",".join(f"{key}=?" for key in fields) + " WHERE id=?",
                         (*fields.values(), call_id))
 
-    def messages(self, run_id):
+    def messages(self, run_id, *, compact=False):
         run = self.get(run_id)
         results = {call["provider_call_id"]: call["result"] for call in run["calls"]}
         messages = []
@@ -99,4 +99,24 @@ class ChatRuns:
                     visible = dict(result)
                     visible["content"] = str(visible.get("content") or "")[:4000]
                     messages.append({"role": "tool", "tool_call_id": call["id"], "content": encode(visible)})
+        if compact and len(encode(messages)) > 48000:
+            initial, groups = [], []
+            for message in messages:
+                if message.get("tool_calls"):
+                    groups.append([message])
+                elif groups:
+                    groups[-1].append(message)
+                else:
+                    initial.append(message)
+            kept, size = [], len(encode(initial))
+            for group in reversed(groups):
+                length = len(encode(group))
+                if kept and size + length > 36000:
+                    break
+                kept.insert(0, group)
+                size += length
+            omitted = len(groups) - len(kept)
+            if omitted:
+                note = {"role": "user", "content": f"较早的 {omitted} 组执行过程已保存在本次任务记录中。附件总览、原图观察和进度已持久化，请用 attachment_assets/attachment_read 查询；继续完成最初任务，不要把工作窗口压缩当作任务结束。"}
+                messages = initial + [note] + [m for group in kept for m in group]
         return messages

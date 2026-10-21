@@ -12,7 +12,6 @@ import tarfile
 import zipfile
 
 ARCHIVES = {".zip", ".7z", ".rar", ".tar", ".tgz", ".tbz", ".tbz2", ".txz", ".gz", ".bz2", ".xz"}
-MAX_PREVIEWS = 20
 
 
 def safe_name(name):
@@ -158,8 +157,6 @@ def inspect_archive(paths, item, directory, *, member=None, depth=0):
                 suffix = Path(entry["name"]).suffix.lower()
                 if suffix in ARCHIVES or (suffix not in SUPPORTED and suffix):
                     continue
-                if len(chosen) >= MAX_PREVIEWS:
-                    continue
                 chosen.append(entry["name"])
         else:
             chosen = [member]
@@ -190,9 +187,9 @@ def inspect_archive(paths, item, directory, *, member=None, depth=0):
                 errors.append(f"{name}：{type(exc).__name__}：{str(exc)[:180]}")
         if member and not successful:
             raise ValueError("；".join(errors) or "该成员没有可读取内容")
-        note = f"共 {len(archive.entries)} 个条目；先预览 {MAX_PREVIEWS} 个支持的文件；其余可用 attachment_read 的 member 参数按内部路径继续读取。"
+        note = f"共 {len(archive.entries)} 个条目；完整目录已保留，可按内部路径继续读取成员。"
         if errors:
             note += "部分成员读取失败：" + "；".join(errors[:10])
         if any(e["blocked"] for e in archive.entries):
             note += "加密、链接或不安全路径的成员未展开。"
-        return "\n".join(text), visuals[:16], note
+        return "\n".join(text), visuals, note

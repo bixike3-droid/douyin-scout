@@ -20,8 +20,6 @@ def file_size(size):
 def thumbnail(path, size=QSize(360, 240)):
     reader = QImageReader(str(path))
     original = reader.size()
-    if original.isValid() and original.width() * original.height() > 40_000_000:
-        return QPixmap()
     reader.setAutoTransform(True)
     if original.isValid():
         reader.setScaledSize(original.scaled(size, Qt.AspectRatioMode.KeepAspectRatio))
@@ -33,14 +31,15 @@ def thumbnail(path, size=QSize(360, 240)):
         register_heif_opener()
         try:
             with Image.open(path) as source:
-                if source.width * source.height > 40_000_000:
-                    return QPixmap()
                 source = ImageOps.exif_transpose(source).convert("RGB")
                 source.thumbnail((size.width(), size.height()))
                 image = QImage(source.tobytes(), source.width, source.height, source.width * 3, QImage.Format.Format_RGB888).copy()
         except Exception:
             return QPixmap()
-    return QPixmap.fromImage(image)
+    pixmap = QPixmap.fromImage(image)
+    if pixmap.width() > size.width() or pixmap.height() > size.height():
+        pixmap = pixmap.scaled(size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+    return pixmap
 
 
 class _PreviewSignals(QObject):
@@ -105,10 +104,12 @@ class _VideoPreview(QRunnable):
 
 class AttachmentTile(QPushButton):
     removed = Signal(str)
+    analysis_requested = Signal(str)
 
     def __init__(self, item, paths=None, *, compact=True, removable=False, parent=None):
         super().__init__(parent)
         self.item, self.compact = item, compact
+        self.account_paths = paths
         self.setObjectName("attachmentTile")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
@@ -139,7 +140,8 @@ class AttachmentTile(QPushButton):
         self.remove_button.hide()
         self.removable = removable
         if self.path and self.kind == "image":
-            self.preview = thumbnail(self.path)
+            preview_path = item.get("thumbnail_relative_path")
+            self.preview = thumbnail(managed_path(paths, preview_path) if preview_path and paths else self.path)
         elif self.path and self.kind == "video":
             preview_path = item.get("preview_relative_path")
             if preview_path and paths:
@@ -157,6 +159,12 @@ class AttachmentTile(QPushButton):
 
     def open_file(self):
         if not self.path or not self.path.is_file():
+            return
+        if self.item.get("id") and self.item.get("workspace", {}).get("total") and self.item.get("kind") == "archive":
+            dialog = WorkspaceDialog(self.item, self.account_paths, self.window())
+            dialog.analysis_requested.connect(self.analysis_requested)
+            self.preview_dialog = dialog
+            dialog.show()
             return
         if self.kind == "image":
             from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel
@@ -420,8 +428,84 @@ class AttachmentFlow(QLayout):
 
 
 class AttachmentGroup(QWidget):
+    analysis_requested = Signal(str)
     def __init__(self, items, paths, parent=None):
         super().__init__(parent)
         layout = AttachmentFlow(self)
         for item in items:
-            layout.addWidget(AttachmentTile(item, paths, compact=False))
+            tile = AttachmentTile(item, paths, compact=False)
+            tile.account_paths = paths
+            tile.analysis_requested.connect(self.analysis_requested)
+            layout.addWidget(tile)
+
+
+from PySide6.QtWidgets import QDialog, QVBoxLayout, QLabel, QLineEdit
+
+
+class WorkspaceDialog(QDialog):
+    analysis_requested = Signal(str)
+
+    def __init__(self, item, paths, parent=None):
+        super().__init__(parent)
+        self.item = item
+        self.paths = paths
+        self.setWindowTitle("素材工作区 · " + item["name"])
+        self.resize(1000, 740)
+        layout = QVBoxLayout(self)
+        self.summary = QLabel()
+        self.summary.setWordWrap(True)
+        layout.addWidget(self.summary)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("搜索文件名、编号或已识别的画面内容")
+        self.search.textChanged.connect(self.render_assets)
+        layout.addWidget(self.search)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        layout.addWidget(self.scroll, 1)
+        footer = QHBoxLayout()
+        self.continue_button = QPushButton("继续分析未完成素材")
+        self.continue_button.clicked.connect(lambda: self.analysis_requested.emit(item["id"]))
+        footer.addWidget(self.continue_button)
+        footer.addStretch()
+        footer.addWidget(QLabel("点击图片查看原图；视频可播放。总览、细看分别记录。"))
+        layout.addLayout(footer)
+        self.assets = []
+        if self.paths:
+            from ..db.connect import Database
+            from ..store.attachment_workspace import AssetStore
+            with Database.open(self.paths.db_path, read_only=True) as db:
+                store = AssetStore(db)
+                self.assets = store.assets(item["id"])
+                progress = store.progress(item["id"])
+            self.summary.setText(f"共 {progress['total']} 项 · 图片 {progress['images']} · 视频 {progress['videos']}\n缩略图 {progress['thumbnails']}/{progress['visual_total']} · 总览 {progress['overviewed']}/{progress['visual_total']} · 细看 {progress['inspected']} · 失败 {progress['failed']}")
+            self.continue_button.setEnabled(progress["overviewed"] < progress["visual_total"] or bool(progress["failed"]))
+        self.render_assets()
+
+    def render_assets(self):
+        body = QWidget()
+        flow = AttachmentFlow(body)
+        query = self.search.text().casefold()
+        for asset in self.assets:
+            if asset["state"] == "directory":
+                continue
+            if query and query not in (asset["name"] + asset["asset_id"] + asset["observation"]).casefold():
+                continue
+            box = QWidget()
+            column = QVBoxLayout(box)
+            column.setContentsMargins(0, 0, 0, 8)
+            metadata = {"name": asset["name"], "relative_path": asset["source_path"], "size": asset["size"] or 0,
+                        "preview_relative_path": asset["thumbnail_path"], "thumbnail_relative_path": asset["thumbnail_path"],
+                        "status": "ready" if asset["observation"] else "failed" if asset["error"] else "processing",
+                        "limitations": asset["error"] or asset["observation"], "preview_text": asset["metadata"].get("text", "")[:12000]}
+            tile = AttachmentTile(metadata, self.paths, compact=False)
+            column.addWidget(tile)
+            caption = QLabel(asset["asset_id"] + " · " + Path(asset["name"]).name)
+            caption.setTextFormat(Qt.TextFormat.PlainText)
+            caption.setFixedWidth(tile.width())
+            caption.setWordWrap(True)
+            column.addWidget(caption)
+            flow.addWidget(box)
+        previous = self.scroll.takeWidget()
+        if previous:
+            previous.deleteLater()
+        self.scroll.setWidget(body)

@@ -321,6 +321,7 @@ class LLMConfig:
     api_key: str = ""
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-flash"
+    vision_model: str = ""  # Empty: official DeepSeek routes visual work to Flash; custom endpoints keep their model.
     timeout_s: int = 120
     max_retries: int = 2
     max_concurrency: int = 3

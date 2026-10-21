@@ -1154,9 +1154,6 @@ class HarnessPage(EnterprisePage):
         if not isinstance(image, QImage) or image.isNull():
             self.notice.emit("剪贴板中没有可用图片")
             return
-        if image.width() * image.height() > 40_000_000:
-            self.notice.emit("图片像素过大，请先缩小后再添加")
-            return
         if not hasattr(self, "_clipboard_images"):
             self._clipboard_images = tempfile.TemporaryDirectory(prefix="scout-pasted-images-", ignore_cleanup_errors=True)
         path = Path(self._clipboard_images.name) / ("截图-" + uuid.uuid4().hex[:8] + ".png")
@@ -1203,14 +1200,11 @@ class HarnessPage(EnterprisePage):
             self.workflow_requested.emit(run["id"], False)
             return
         if users[-1].get("attachments"):
-            from ..attachments import managed_path
-            paths = []
-            for item in users[-1]["attachments"]:
-                if item.get("source_path"):
-                    paths.append(item["source_path"])
-                elif item.get("relative_path"):
-                    paths.append(str(managed_path(self.attachment_paths, item["relative_path"])))
-            self.attachment_tray.add_files(paths)
+            saved = [item for item in users[-1]["attachments"] if item.get("id")]
+            if saved:
+                self.task_requested.emit("继续完成上次的附件任务：" + users[-1]["content"] + "\n附件ID：" + ",".join(a["id"] for a in saved), False)
+                return
+            self.attachment_tray.add_files([item["source_path"] for item in users[-1]["attachments"] if item.get("source_path")])
         self.task_requested.emit(users[-1]["content"], False)
 
     def new_task(self):
@@ -1718,7 +1712,9 @@ class HarnessPage(EnterprisePage):
         block.addLayout(header)
         if message.get("attachments"):
             from .attachments import AttachmentGroup
-            block.addWidget(AttachmentGroup(message["attachments"], self.attachment_paths))
+            group = AttachmentGroup(message["attachments"], self.attachment_paths)
+            group.analysis_requested.connect(lambda attachment_id, goal=message["content"]: self.task_requested.emit("继续完成附件任务：" + goal + "\n附件ID：" + attachment_id + "。先继续未完成总览，再按任务查看原图。", False))
+            block.addWidget(group)
         if role == "assistant" and (message.get("reasoning") or "").strip():
             block.addWidget(ReasoningPanel(message["reasoning"].strip(), running=False, motion=self.motion_enabled))
         content = message["content"]

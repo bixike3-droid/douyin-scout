@@ -26,6 +26,8 @@ class Conversations:
             for metadata in message["attachments"]:
                 item = next(a for a in attachments if a["id"] == metadata["id"])
                 metadata["preview_text"] = item["text_content"][:12000]
+                from .attachment_workspace import AssetStore
+                metadata["workspace"] = AssetStore(self.db).progress(item["id"])
         from .workflow import Workflows
         data["workflow"] = Workflows(self.db).latest(conversation_id)
         from .chat import ChatRuns
