@@ -201,9 +201,9 @@
     // 自建下载渠道优先：包里只有一个文件，链接固定，不依赖 GitHub API
     if (downloadButton) {
       downloadButton.href = DOWNLOAD_BASE + "yuanjing-latest.zip";
-      downloadButton.setAttribute("download", "yuanjing-0.9.0-windows-x64.zip");
+      downloadButton.setAttribute("download", "yuanjing-0.10.1-windows-x64.zip");
     }
-    if (versionNode) versionNode.textContent = "v0.9.1 · Windows · 95MB";
+    if (versionNode) versionNode.textContent = "v0.10.1 · Windows · 147MB";
   } else if (location.protocol === "file:") {
     if (versionNode) versionNode.textContent = "最新版本请见 Releases";
   } else {
