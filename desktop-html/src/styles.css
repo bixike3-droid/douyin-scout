@@ -40,8 +40,8 @@
     --hover: #e9ebef;
     --line: #e7e9ee;
     --text: #24262b;
-    --muted: #8b909a;
-    --secondary: #646b77;
+    --muted: #7c828e;
+    --secondary: #565d6a;
     --accent: #3567df;
     --accent-soft: #edf2ff;
     --danger: #bd454a;
@@ -61,8 +61,8 @@
     --hover: #2c2f35;
     --line: #30333a;
     --text: #e9eaf0;
-    --muted: #818793;
-    --secondary: #b0b5c0;
+    --muted: #9198a6;
+    --secondary: #c2c7d2;
     --accent: #8aa9ff;
     --accent-soft: #27324c;
     --danger: #eb9397;
@@ -172,8 +172,8 @@
 @layer components {
   /* Markdown 正文排版（替代原 style.css 的 .markdown） */
   .md {
-    font-size: 13.5px;
-    line-height: 1.9;
+    font-size: 14px;
+    line-height: 1.85;
     color: var(--text);
     overflow-wrap: anywhere;
   }

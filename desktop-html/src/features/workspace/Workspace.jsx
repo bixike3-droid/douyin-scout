@@ -6,6 +6,7 @@ import {
 import {
   Choices, CopyButton, FileTile, Markdown, Thought, ToolSteps, parseChoices,
 } from '../../ui/media.jsx';
+import { dateLabel } from '../../api.js';
 import { Button, cn } from '../../ui/kit.jsx';
 
 const STARTERS = [
@@ -24,7 +25,7 @@ const STATUS_TEXT = {
 function Welcome({ onPick, onDropHint }) {
   const [draftSeed, setDraftSeed] = useState(null);
   return (
-    <div className="mx-auto max-w-[700px] px-6 pb-6 pt-[clamp(40px,10vh,120px)] text-center">
+    <div className="mx-auto max-w-[780px] px-6 pb-6 pt-[clamp(32px,8vh,96px)] text-center">
       <div
         className="mx-auto mb-[22px] grid h-[62px] w-[62px] place-items-center rounded-[19px] border border-line shadow-[0_6px_22px_rgb(20_30_60/0.07)]"
         style={{ background: 'linear-gradient(160deg, color-mix(in srgb, var(--accent) 10%, var(--bg)), var(--bg))' }}
@@ -66,7 +67,7 @@ function Welcome({ onPick, onDropHint }) {
 
 /* ---------------------------------------------------------------- 消息 */
 
-function Message({ message, onOpen }) {
+function Message({ message, onOpen, onSend }) {
   const user = message.role === 'user';
   const error = message.role === 'error';
   const parsed = parseChoices(message.content || '');
@@ -74,8 +75,8 @@ function Message({ message, onOpen }) {
   const generated = (message.attachments || []).filter((item) => item.generated);
 
   return (
-    <article className={cn('group mb-6', user && 'ml-auto w-fit max-w-[85%]')}>
-      <div className={cn('mb-[7px] flex min-h-[24px] items-center gap-2 text-[11.5px] text-secondary', user && 'justify-end')}>
+    <article className={cn('group mb-[18px]', user && 'ml-auto w-fit max-w-[72%]')}>
+      <div className={cn('mb-1.5 flex min-h-[22px] items-center gap-2 text-[11.5px] text-secondary', user && 'justify-end')}>
         {user ? (
           <span>你</span>
         ) : (
@@ -87,6 +88,9 @@ function Message({ message, onOpen }) {
         <span className="opacity-0 transition-opacity group-hover:opacity-100">
           <CopyButton text={message.content || ''} />
         </span>
+        {message.created_at ? (
+          <time className="text-[10.5px] text-muted">{dateLabel(message.created_at)}</time>
+        ) : null}
       </div>
 
       {files.length ? (
@@ -98,16 +102,16 @@ function Message({ message, onOpen }) {
       {!user && message.reasoning ? <Thought text={message.reasoning} /> : null}
 
       {user ? (
-        <div className="whitespace-pre-wrap break-words rounded-[14px_14px_4px_14px] border border-[color-mix(in_srgb,var(--accent)_14%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_9%,var(--bg))] px-[15px] py-[11px] text-[13.5px] leading-[1.8] text-text">
+        <div className="whitespace-pre-wrap break-words rounded-[12px_12px_4px_12px] border border-[color-mix(in_srgb,var(--accent)_14%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_9%,var(--bg))] px-3.5 py-2.5 text-[13.5px] leading-[1.75] text-text">
           {message.content}
         </div>
       ) : (
-        <div className={cn('text-[13.5px] leading-[1.9] text-text', error && 'rounded-[10px] border border-[color-mix(in_srgb,var(--danger)_20%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_5%,var(--bg))] px-4 py-3.5')}>
+        <div className={cn('text-[13.5px] leading-[1.8] text-text', error && 'rounded-[10px] border border-[color-mix(in_srgb,var(--danger)_20%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_5%,var(--bg))] px-4 py-3.5')}>
           <Markdown text={parsed.text} />
         </div>
       )}
 
-      {parsed.questions.length ? <Choices questions={parsed.questions} onSend={() => {}} /> : null}
+      {parsed.questions.length ? <Choices questions={parsed.questions} onSend={onSend} /> : null}
 
       {generated.length ? (
         <div className="mt-4 flex flex-wrap gap-2.5">
@@ -194,7 +198,7 @@ function Composer({
   };
 
   return (
-    <div className="mx-auto w-full max-w-[760px] shrink-0 px-[26px] pb-3.5 pt-1">
+    <div className="mx-auto w-full max-w-[780px] shrink-0 px-7 pb-3 pt-1">
       <div
         className={cn(
           'overflow-hidden rounded-[18px] border bg-bg shadow-[0_6px_24px_rgb(20_30_60/0.07)] transition-[border-color,box-shadow] duration-150',
@@ -230,7 +234,7 @@ function Composer({
             }
           }}
           placeholder={active && ready ? '补充要求，按 Enter 追加到当前任务…' : '说说你的想法，或拖入文件…'}
-          className="block min-h-[74px] max-h-[180px] w-full resize-none border-0 bg-transparent px-4 pb-1.5 pt-4 text-[13.5px] leading-[1.85] text-text outline-none placeholder:text-muted"
+          className="block min-h-[62px] max-h-[180px] w-full resize-none border-0 bg-transparent px-3.5 pb-1 pt-3.5 text-[13.5px] leading-[1.8] text-text outline-none placeholder:text-muted"
         />
 
         <div className="flex items-center justify-between px-3 pb-2.5 pt-1">
@@ -377,7 +381,7 @@ export default function Workspace({
 
   return (
     <main className="col-start-2 row-start-2 flex min-h-0 min-w-0 flex-col bg-bg">
-      <header className="flex h-[52px] shrink-0 items-center justify-between gap-4 border-b border-line bg-[color-mix(in_srgb,var(--bg)_92%,var(--sidebar))] px-5">
+      <header className="flex h-[48px] shrink-0 items-center justify-between gap-4 border-b border-line bg-[color-mix(in_srgb,var(--bg)_92%,var(--sidebar))] px-4">
         <div className="flex min-w-0 items-center gap-2 text-[11.5px]">
           <span className="whitespace-nowrap text-muted">工作台</span>
           <ChevronDown size={11} className="rotate-[-90deg] text-muted" />
@@ -445,9 +449,9 @@ export default function Workspace({
         <section className="relative flex min-h-0 min-w-0 flex-1 flex-col">
           <div ref={scroller} onScroll={onScroll} className="flex-1 overflow-auto [scrollbar-gutter:stable]">
             {messages.length || active ? (
-              <div className="mx-auto max-w-[760px] px-[26px] pb-6 pt-7">
+              <div className="mx-auto max-w-[780px] px-7 pb-6 pt-6">
                 {messages.map((message, index) => (
-                  <Message key={message.id || index} message={message} onOpen={onOpenFile} />
+                  <Message key={message.id || index} message={message} onOpen={onOpenFile} onSend={onSend} />
                 ))}
                 {active ? <StreamingMessage job={job} /> : null}
                 {showResume ? (
