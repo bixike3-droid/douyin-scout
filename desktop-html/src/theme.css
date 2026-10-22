@@ -17,9 +17,10 @@
 .app-chrome {
   height: 44px;
   padding-left: 18px;
-  background: color-mix(in srgb, var(--sidebar) 85%, var(--bg));
+  background: color-mix(in srgb, var(--sidebar) 88%, var(--bg));
   border-bottom: 1px solid var(--line);
-  backdrop-filter: saturate(140%) blur(12px);
+  /* 注意：这里不能加 backdrop-filter。它会建合成层，导致子元素（窗口按钮）
+     的 hover 过渡在 QtWebEngine 里不重绘，表现为“没有动画” */
 }
 
 .app-brand span {
@@ -42,8 +43,30 @@
 }
 
 .window-controls button {
-  width: 42px;
-  transition: background-color 0.12s ease;
+  width: 46px;
+  padding: 0;
+  background: transparent;
+  color: var(--secondary);
+  transition: background-color 0.16s ease, color 0.16s ease, transform 0.12s ease;
+}
+
+.window-controls button:hover {
+  background: color-mix(in srgb, var(--muted) 20%, transparent);
+  color: var(--text);
+}
+
+.window-controls button:active {
+  transform: scale(0.92);
+}
+
+.window-controls .close-window:hover {
+  background: #c9474b;
+  color: #fff;
+}
+
+.window-controls .close-window:active {
+  background: #b03c40;
+  transform: scale(0.92);
 }
 
 /* ------------------------------------------------------------ 侧栏 */
