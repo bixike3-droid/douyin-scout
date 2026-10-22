@@ -1,61 +1,72 @@
 @echo off
-chcp 65001 >nul
+rem Browser-based dev preview (fallback). ASCII only, see 开发窗口.bat note.
 setlocal
 cd /d "%~dp0"
 set "ROOT=%~dp0.."
 set "PY=%ROOT%\.venv\Scripts\python.exe"
+set "TMPCMD=%TEMP%\yuanjing-preview-%RANDOM%.cmd"
 
 if not exist "%PY%" (
-  echo [x] 没找到 .venv，请先运行 desktop\启动.bat 准备环境
+  echo [x] .venv not found. Run desktop\启动.bat first.
   pause
   exit /b 1
 )
 
-echo [1/3] 检查本地 API...
-set "READY=%ROOT%\tmp\ready.json"
-set "INFO=%ROOT%\tmp\info.txt"
-set "APIPORT=8765"
+for /f "delims=" %%p in ('powershell -NoProfile -Command "$l=[System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback,0); $l.Start(); $p=$l.LocalEndpoint.Port; $l.Stop(); $p"') do set "APIPORT=%%p"
+for /f "delims=" %%p in ('powershell -NoProfile -Command "$l=[System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback,0); $l.Start(); $p=$l.LocalEndpoint.Port; $l.Stop(); $p"') do set "DEVPORT=%%p"
+
 if not exist "%ROOT%\tmp" mkdir "%ROOT%\tmp"
-set "INFO_TEXT="
-if exist "%READY%" (
-  powershell -NoProfile -Command "try { $j = Get-Content '%READY%' -Raw | ConvertFrom-Json; $u = 'http://127.0.0.1:' + $j.port + '/api/bootstrap'; $r = Invoke-WebRequest $u -TimeoutSec 3 -UseBasicParsing -Headers @{ Authorization = ('Bearer ' + $j.token) }; if ($r.StatusCode -eq 200) { Write-Output ('http://127.0.0.1:' + $j.port + ' ' + $j.token) } } catch { }" > "%INFO%"
-  set /p INFO_TEXT=<"%INFO%"
-)
-if defined INFO_TEXT goto have_api
+del /q "%ROOT%\tmp\ready.json" >nul 2>&1
 
-echo       启动新的后端（固定端口 %APIPORT%）...
-del /q "%READY%" >nul 2>&1
+echo [1/4] starting api on %APIPORT% ...
 set "PYTHONPATH=%ROOT%\src"
-start "yuanjing-api" /min "%PY%" "%~dp0app.py" --serve-only --port %APIPORT% --ready-file "%READY%" --data-dir "%ROOT%\tmp\webtest"
-set /a tries=0
+start "yuanjing-api" /min "%PY%" "%~dp0app.py" --serve-only --port %APIPORT% --ready-file "%ROOT%\tmp\ready.json" --data-dir "%ROOT%\tmp\webtest"
+
+set /a n=0
 :wait_api
-if exist "%READY%" goto read_api
-set /a tries+=1
-if %tries% GEQ 40 (
-  echo [x] 后端没起来。日志: tmp\webtest\data\accounts\main\logs\html-desktop.log
-  pause
-  exit /b 1
-)
+if exist "%ROOT%\tmp\ready.json" goto api_ok
+set /a n+=1
+if %n% GEQ 60 goto api_fail
 timeout /t 1 /nobreak >nul
 goto wait_api
 
-:read_api
-powershell -NoProfile -Command "$j = Get-Content '%READY%' -Raw | ConvertFrom-Json; Write-Output ('http://127.0.0.1:' + $j.port + ' ' + $j.token)" > "%INFO%"
-set /p INFO_TEXT=<"%INFO%"
+:api_fail
+echo [x] api did not start.
+pause
+exit /b 1
 
-:have_api
-for /f "tokens=1,2" %%a in ("%INFO_TEXT%") do (
-  set "SCOUT_API=%%a"
-  set "PREVIEW_URL=http://127.0.0.1:5173/#token=%%b"
-)
+:api_ok
+> "%TMPCMD%" echo @echo off
+>>"%TMPCMD%" echo cd /d "%~dp0"
+>>"%TMPCMD%" echo set "SCOUT_API=http://127.0.0.1:%APIPORT%"
+>>"%TMPCMD%" echo set "SCOUT_DEV_PORT=%DEVPORT%"
+>>"%TMPCMD%" echo call npm run dev
 
-echo [2/3] 后端: %SCOUT_API%
-echo [3/3] 前端: npm run dev（热更新，关闭此窗口即停止前端）
+echo [2/4] starting vite on %DEVPORT% ...
+start "yuanjing-vite" /min cmd /c "%TMPCMD%"
+
+set /a n=0
+:wait_dev
+set "ALIVE="
+for /f "delims=" %%i in ('powershell -NoProfile -Command "try { $r = Invoke-WebRequest http://127.0.0.1:%DEVPORT%/ -TimeoutSec 2 -UseBasicParsing; if ($r.StatusCode -eq 200) { Write-Output 1 } } catch { }"') do set "ALIVE=%%i"
+if "%ALIVE%"=="1" goto dev_ok
+set /a n+=1
+if %n% GEQ 60 goto dev_fail
+timeout /t 1 /nobreak >nul
+goto wait_dev
+
+:dev_fail
+echo [x] dev server did not start.
+pause
+exit /b 1
+
+:dev_ok
+for /f "delims=" %%i in ('powershell -NoProfile -Command "$j = Get-Content \"%ROOT%\tmp\ready.json\" -Raw ^| ConvertFrom-Json; Write-Output $j.token"') do set "TOKEN=%%i"
 echo.
-echo    预览地址（每次 token 不同，以这一行为准）:
-echo    %PREVIEW_URL%
+echo [3/4] open in browser:
+echo    http://127.0.0.1:%DEVPORT%/#token=%TOKEN%
 echo.
-
-start "" "%PREVIEW_URL%"
-call npm run dev
-endlocal
+start "" "http://127.0.0.1:%DEVPORT%/#token=%TOKEN%"
+echo [4/4] vite is running. Close this window to stop the api.
+echo.
+pause

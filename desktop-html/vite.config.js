@@ -17,12 +17,13 @@ export default defineConfig({
   },
   server: {
     host: '127.0.0.1',
-    port: 5173,
+    port: Number(process.env.SCOUT_DEV_PORT || 5173),
     strictPort: true,
     proxy: {
       '/api': { target: apiTarget, changeOrigin: true, ws: true },
       '/brand.png': { target: apiTarget, changeOrigin: true },
       '/bridge.js': { target: apiTarget, changeOrigin: true },
+      '/mermaid.js': { target: apiTarget, changeOrigin: true },
     },
   },
   build: { outDir: 'dist', emptyOutDir: true },
