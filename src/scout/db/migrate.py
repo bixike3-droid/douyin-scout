@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 
 from ..util import iso
@@ -56,6 +57,10 @@ def migrate(db: Database, directory: Path = MIGRATIONS_DIR, *, verbose: bool = F
     注意：sqlite3 的 executescript() 会先隐式提交当前事务，所以不能把它包在
     Database.transaction() 里。这里改成把 BEGIN/COMMIT 写进脚本本身来保证原子性；
     迁移记录随后单独写入。DDL 全部是 IF NOT EXISTS，即使中途断电重跑也安全。
+
+    例外：历史上 0025 在建表后被追加过一列（attachment_map_json），已经把 0025
+    记为已执行的老库因此缺列。补列迁移（0026）在新库上会报 duplicate column name，
+    这不是失败，视为该迁移已完成。
     """
     _ensure_table(db)
     done = applied_versions(db)
@@ -66,6 +71,13 @@ def migrate(db: Database, directory: Path = MIGRATIONS_DIR, *, verbose: bool = F
         sql = path.read_text(encoding="utf-8")
         try:
             db.conn.executescript(f"BEGIN;\n{sql}\nCOMMIT;")
+        except sqlite3.OperationalError as exc:
+            try:
+                db.conn.execute("ROLLBACK")
+            except Exception:
+                pass
+            if "duplicate column name" not in str(exc).lower():
+                raise
         except Exception:
             try:
                 db.conn.execute("ROLLBACK")

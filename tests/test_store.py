@@ -14,6 +14,26 @@ def test_migrate_is_idempotent(ctx):
     assert pending_versions(ctx.db) == [], "迁移完不应再有待应用项"
 
 
+def test_late_added_columns_are_repaired_on_old_databases(tmp_path):
+    """历史遗留：0025 执行完之后又被追加过列，老库不会重跑 0025，须由补列迁移修好。"""
+    from scout.db.connect import Database
+
+    def columns(db, table):
+        return {row["name"] for row in db.query(f"PRAGMA table_info({table})")}
+
+    with Database.open(tmp_path / "legacy.db") as db:
+        migrate(db)
+        # 还原成“已经跑过 0025、但两张表都缺列”的真实老库形态
+        db.execute("ALTER TABLE conversation_branches DROP COLUMN attachment_map_json")
+        db.execute("ALTER TABLE codex_sessions DROP COLUMN tools_digest")
+        db.execute("DELETE FROM schema_migrations WHERE version IN (26,27)")
+
+        assert migrate(db) == ["0026_branch_attachment_map", "0027_codex_session_tools_digest"]
+        assert "attachment_map_json" in columns(db, "conversation_branches")
+        assert "tools_digest" in columns(db, "codex_sessions")
+        assert migrate(db) == [], "补完列之后不应再有待应用项"
+
+
 def test_users_upsert_is_idempotent_and_merges(ctx):
     ctx.users.upsert({"sec_uid": "SEC1", "nickname": "张三"})
     ctx.users.upsert({"sec_uid": "SEC1", "nickname": "张三改", "follower_count": 1200})
