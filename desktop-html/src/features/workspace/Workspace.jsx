@@ -7,7 +7,7 @@ import {
   Choices, CopyButton, FileTile, Markdown, Thought, ToolSteps, parseChoices,
 } from '../../ui/media.jsx';
 import { dateLabel } from '../../api.js';
-import { Button, cn } from '../../ui/kit.jsx';
+import { Button, Select, cn } from '../../ui/kit.jsx';
 
 const STARTERS = [
   { icon: ImageIcon, title: '分析一组素材', text: '请帮我梳理这些素材，分析主要内容，并给出适合的使用方向。', note: '图片、视频与压缩包' },
@@ -172,12 +172,22 @@ function StreamingMessage({ job }) {
 
 /* -------------------------------------------------------------- 输入区 */
 
+const MODEL_OPTIONS = [
+  { value: 'deepseek-flash', label: 'DeepSeek Flash' },
+  { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
+];
+
+
 function Composer({
   draft, onDraft, uploads, onRemoveUpload, onOpenFile, onPickFiles, onAddFiles,
-  onSend, onStop, sending, active, ready, pendingSteer, model, engine, onOpenSettings, hint,
+  onSend, onStop, sending, active, ready, pendingSteer, model, onPickModel, engine, hint,
 }) {
   const textarea = useRef(null);
   const canSend = active ? !!ready : draft.trim().length > 0 || uploads.length > 0;
+  // 自定义模型（配置文件里手写的）也要能显示出来，不然 chip 会空白
+  const modelOptions = MODEL_OPTIONS.some((item) => item.value === model) || !model
+    ? MODEL_OPTIONS
+    : [...MODEL_OPTIONS, { value: model, label: model }];
 
   useLayoutEffect(() => {
     const node = textarea.current;
@@ -247,15 +257,15 @@ function Composer({
             >
               <Plus size={17} />
             </button>
-            <button
-              type="button"
-              title="更改模型"
-              onClick={onOpenSettings}
-              className="flex items-center gap-1.5 rounded-full border border-line bg-subtle px-2 py-1 text-[10.5px] text-secondary transition-colors hover:border-[color-mix(in_srgb,var(--accent)_30%,var(--line))] hover:text-text"
-            >
-              {model}
-              <ChevronDown size={12} />
-            </button>
+            <Select
+              variant="chip"
+              aria-label="选择模型"
+              title="切换模型"
+              value={model}
+              disabled={!!active}
+              onChange={onPickModel}
+              options={modelOptions}
+            />
             {engine === 'codex' ? (
               <span className="rounded border border-line px-1.5 py-[3px] text-[10px] text-muted">Codex</span>
             ) : null}
@@ -344,7 +354,7 @@ function Inspector({ conversation, job, onClose }) {
 export default function Workspace({
   conversation, cid, job, active, busy, settings, connection,
   draft, onDraft, uploads, onRemoveUpload, onPickFiles, onAddFiles,
-  onSend, onStop, sending, pendingSteer, onOpenFile, onOpenSettings,
+  onSend, onStop, sending, pendingSteer, onOpenFile, onPickModel,
   inspector, onToggleInspector, onOpenRunningJob, onResume, onRename, onFork, onCompact,
 }) {
   const scroller = useRef(null);
@@ -506,9 +516,9 @@ export default function Workspace({
             active={active}
             ready={!!job?.ready}
             pendingSteer={pendingSteer}
-            model={settings?.model === 'deepseek-flash' ? 'DeepSeek Flash' : settings?.model === 'deepseek-v4-pro' ? 'DeepSeek V4 Pro' : (settings?.model || 'DeepSeek')}
+            model={settings?.model || 'deepseek-flash'}
+            onPickModel={onPickModel}
             engine={settings?.agent_engine}
-            onOpenSettings={onOpenSettings}
             hint={active ? job?.message?.slice(0, 45) : ''}
           />
         </section>

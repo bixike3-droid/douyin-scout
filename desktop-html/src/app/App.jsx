@@ -105,6 +105,19 @@ export default function App() {
     try { await api('/preferences', { method: 'PUT', body: { theme } }); } catch (error) { notify(error.message); }
   }
 
+  /** 输入区直接切模型：写回 llm.local.yaml（api_key 传空 = 保留原值） */
+  async function pickModel(model) {
+    if (!model || model === settings?.model) return;
+    const previous = settings;
+    setSettings((value) => ({ ...value, model }));
+    try {
+      setSettings(await api('/settings', { method: 'PUT', body: { api_key: '', model } }));
+    } catch (error) {
+      setSettings(previous);
+      notify(error.message);
+    }
+  }
+
   /* ------------------------------------------------------------ 任务 ---- */
 
   async function startJob(kind, options = {}) {
@@ -493,6 +506,7 @@ export default function App() {
             pendingSteer={pendingSteer}
             onOpenFile={openFile}
             onOpenSettings={() => setView('settings')}
+            onPickModel={pickModel}
             inspector={inspector}
             onToggleInspector={() => setInspector(!inspector)}
             onOpenRunningJob={(id) => loadConversation(id)}

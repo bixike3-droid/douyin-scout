@@ -152,7 +152,7 @@ export function SettingsPage({
                       <Select
                         aria-label="模型"
                         value={values.model || 'deepseek-flash'}
-                        onChange={(event) => setValues({ ...values, model: event.target.value })}
+                        onChange={(model) => setValues({ ...values, model })}
                       >
                         {!['deepseek-flash', 'deepseek-v4-pro'].includes(values.model) && values.model ? (
                           <option>{values.model}</option>
@@ -165,7 +165,7 @@ export function SettingsPage({
                       <Select
                         aria-label="思考强度"
                         value={values.reasoning_effort || 'high'}
-                        onChange={(event) => setValues({ ...values, reasoning_effort: event.target.value })}
+                        onChange={(reasoning_effort) => setValues({ ...values, reasoning_effort })}
                       >
                         <option value="low">低</option>
                         <option value="high">中</option>
@@ -178,7 +178,7 @@ export function SettingsPage({
                     <Select
                       aria-label="对话引擎"
                       value={values.agent_engine || 'native'}
-                      onChange={(event) => setValues({ ...values, agent_engine: event.target.value })}
+                      onChange={(agent_engine) => setValues({ ...values, agent_engine })}
                     >
                       <option value="native">源镜</option>
                       <option value="codex">Codex · 试用</option>
