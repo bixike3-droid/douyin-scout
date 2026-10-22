@@ -11,37 +11,51 @@ if not exist "%PY%" (
   exit /b 1
 )
 
-echo [1/3] 启动本地 API 服务...
+echo [1/3] 检查本地 API...
+set "READY=%ROOT%\tmp\ready.json"
+set "INFO=%ROOT%\tmp\info.txt"
+set "APIPORT=8765"
 if not exist "%ROOT%\tmp" mkdir "%ROOT%\tmp"
-del /q "%ROOT%\tmp\ready.json" >nul 2>&1
-set "PYTHONPATH=%ROOT%\src"
-start "yuanjing-api" /min "%PY%" "%~dp0app.py" --serve-only --ready-file "%ROOT%\tmp\ready.json" --data-dir "%ROOT%\tmp\webtest"
+set "INFO_TEXT="
+if exist "%READY%" (
+  powershell -NoProfile -Command "try { $j = Get-Content '%READY%' -Raw | ConvertFrom-Json; $u = 'http://127.0.0.1:' + $j.port + '/api/bootstrap'; $r = Invoke-WebRequest $u -TimeoutSec 3 -UseBasicParsing -Headers @{ Authorization = ('Bearer ' + $j.token) }; if ($r.StatusCode -eq 200) { Write-Output ('http://127.0.0.1:' + $j.port + ' ' + $j.token) } } catch { }" > "%INFO%"
+  set /p INFO_TEXT=<"%INFO%"
+)
+if defined INFO_TEXT goto have_api
 
-echo [2/3] 等待服务就绪（最多 30 秒）...
+echo       启动新的后端（固定端口 %APIPORT%）...
+del /q "%READY%" >nul 2>&1
+set "PYTHONPATH=%ROOT%\src"
+start "yuanjing-api" /min "%PY%" "%~dp0app.py" --serve-only --port %APIPORT% --ready-file "%READY%" --data-dir "%ROOT%\tmp\webtest"
 set /a tries=0
-:wait
-if exist "%ROOT%\tmp\ready.json" goto ready
+:wait_api
+if exist "%READY%" goto read_api
 set /a tries+=1
-if %tries% GEQ 30 (
-  echo [x] 服务没起来，查看日志: tmp\webtest\data\accounts\main\logs\html-desktop.log
+if %tries% GEQ 40 (
+  echo [x] 后端没起来。日志: tmp\webtest\data\accounts\main\logs\html-desktop.log
   pause
   exit /b 1
 )
 timeout /t 1 /nobreak >nul
-goto wait
+goto wait_api
 
-:ready
-for /f "delims=" %%i in ('powershell -NoProfile -Command "$j=Get-Content \"%ROOT%\tmp\ready.json\" -Raw | ConvertFrom-Json; Write-Output ($j.port.ToString() + ' ' + $j.token)"') do set "INFO=%%i"
-for /f "tokens=1,2" %%a in ("%INFO%") do (
-  set "PORT=%%a"
-  set "TOKEN=%%b"
+:read_api
+powershell -NoProfile -Command "$j = Get-Content '%READY%' -Raw | ConvertFrom-Json; Write-Output ('http://127.0.0.1:' + $j.port + ' ' + $j.token)" > "%INFO%"
+set /p INFO_TEXT=<"%INFO%"
+
+:have_api
+for /f "tokens=1,2" %%a in ("%INFO_TEXT%") do (
+  set "SCOUT_API=%%a"
+  set "PREVIEW_URL=http://127.0.0.1:5173/#token=%%b"
 )
-set "SCOUT_API=http://127.0.0.1:%PORT%"
-echo [3/3] 后端端口: %PORT%
+
+echo [2/3] 后端: %SCOUT_API%
+echo [3/3] 前端: npm run dev（热更新，关闭此窗口即停止前端）
 echo.
-echo    预览地址（每次 token 不同，复制这一行）:
-echo    http://127.0.0.1:5173/#token=%TOKEN%
+echo    预览地址（每次 token 不同，以这一行为准）:
+echo    %PREVIEW_URL%
 echo.
-start "" "http://127.0.0.1:5173/#token=%TOKEN%"
+
+start "" "%PREVIEW_URL%"
 call npm run dev
 endlocal
