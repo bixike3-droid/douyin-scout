@@ -102,10 +102,22 @@ def main(default_root=None):
 
         @Slot(str)
         def windowAction(self, action):
+            # 最小化/最大化必须交给系统（WM_SYSCOMMAND），否则 DWM 的过渡动画不会播放：
+            # showMinimized()/showMaximized() 只是改窗口状态，窗口会「啪」地跳过去。
+            def syscommand(code):
+                import ctypes
+                hwnd = int(window.winId())
+                ctypes.windll.user32.PostMessageW(hwnd, 0x0112, code, 0)
+                return True
+
+            is_windows = sys.platform == "win32"
             if action == "minimize":
-                window.showMinimized()
+                if not (is_windows and syscommand(0xF020)):       # SC_MINIMIZE
+                    window.showMinimized()
             elif action == "maximize":
-                window.showNormal() if window.isMaximized() else window.showMaximized()
+                code = 0xF120 if window.isMaximized() else 0xF030  # SC_RESTORE / SC_MAXIMIZE
+                if not (is_windows and syscommand(code)):
+                    window.showNormal() if window.isMaximized() else window.showMaximized()
             elif action == "close":
                 window.close()
             elif action == "drag" and window.windowHandle():
