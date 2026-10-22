@@ -121,12 +121,41 @@ def main(default_root=None):
 
             is_windows = sys.platform == "win32"
             if action == "minimize":
-                if not (is_windows and syscommand(0xF020)):       # SC_MINIMIZE
+                if window._anim_group is not None:
+                    return
+                from PySide6.QtCore import QRect as _Rect
+                start = window.geometry()
+                screen = window.screen().availableGeometry()
+                shrink = _Rect(
+                    start.center().x() - start.width() // 6,
+                    screen.bottom() - 90,
+                    max(180, start.width() // 3),
+                    max(120, start.height() // 3),
+                )
+
+                def done():
+                    window._anim_minimized = True
                     window.showMinimized()
+                    window.setWindowOpacity(1.0)
+                    window.setGeometry(start)
+
+                window.animate_to(shrink, 0.0, done, duration=160)
             elif action == "maximize":
-                code = 0xF120 if window.isMaximized() else 0xF030  # SC_RESTORE / SC_MAXIMIZE
-                if not (is_windows and syscommand(code)):
-                    window.showNormal() if window.isMaximized() else window.showMaximized()
+                if window._anim_group is not None:
+                    return
+                from PySide6.QtCore import QRect as _Rect
+                screen = window.screen().availableGeometry()
+                if window.isMaximized():
+                    start = window.geometry()
+                    target = getattr(window, "_normal_geometry", None) or start.adjusted(40, 40, -40, -40)
+                    window.setWindowState(Qt.WindowState.WindowNoState)
+                    window.setGeometry(start)
+                    window.animate_to(target, 1.0, lambda: None, duration=170)
+                else:
+                    window._normal_geometry = window.geometry()
+                    window.animate_to(_Rect(screen), 1.0,
+                                      lambda: window.setWindowState(Qt.WindowState.WindowMaximized),
+                                      duration=170)
             elif action == "close":
                 window.close()
             elif action == "drag" and window.windowHandle():
@@ -193,6 +222,8 @@ def main(default_root=None):
             self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
             self.resize(1440, 960)
             self.setMinimumSize(1040, 680)
+            self._anim_group = None
+            self._anim_minimized = False
             self.preferences = QSettings("源镜", "HTML窗口")
             saved = self.preferences.value("geometry")
             if saved:
@@ -200,6 +231,50 @@ def main(default_root=None):
             self.setWindowIcon(QIcon(str(Path(__file__).resolve().parent.parent / "desktop" / "assets" / "yuanjing.ico")))
             self.setCentralWidget(view)
             app.installEventFilter(self)
+
+        # ---- 自绘最小化/还原动画（不依赖 DWM）----
+        def animate_to(self, target, opacity, done, duration=170):
+            from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation
+            if self._anim_group is not None:
+                return self._fallback(done)
+            start = self.geometry()
+            group = QParallelAnimationGroup(self)
+            geo = QPropertyAnimation(self, b"geometry", group)
+            geo.setDuration(duration)
+            geo.setStartValue(start)
+            geo.setEndValue(target)
+            geo.setEasingCurve(QEasingCurve.Type.OutCubic)
+            fade = QPropertyAnimation(self, b"windowOpacity", group)
+            fade.setDuration(duration)
+            fade.setStartValue(self.windowOpacity())
+            fade.setEndValue(opacity)
+            fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+
+            def finished():
+                self._anim_group = None
+                self._anim_restore = start
+                done()
+
+            group.finished.connect(finished)
+            self._anim_group = group
+            group.start()
+
+        def _fallback(self, done):
+            done()
+
+        def changeEvent(self, event):
+            if event.type() == QEvent.Type.WindowStateChange and self._anim_minimized and not self.isMinimized():
+                self._anim_minimized = False
+                from PySide6.QtCore import QEasingCurve, QPropertyAnimation
+                fade = QPropertyAnimation(self, b"windowOpacity", self)
+                fade.setDuration(180)
+                fade.setStartValue(0.0)
+                fade.setEndValue(1.0)
+                fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+                fade.start()
+                self._anim_group = fade
+                fade.finished.connect(lambda: setattr(self, "_anim_group", None))
+            super().changeEvent(event)
 
         def eventFilter(self, watched, event):
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and not self.isMaximized() and hasattr(watched, "window") and watched.window() == self:
