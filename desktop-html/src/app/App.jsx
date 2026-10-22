@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { api, authToken, nativeBridge, uploadFile, dateLabel } from '../api.js';
 import { FilePreview, Gallery } from '../components.jsx';
-import { Library, DataPage, Benchmarks, Reports } from '../pages.jsx';
+import { Library, DataPage, Benchmarks, Reports } from '../features/pages.jsx';
 import { SettingsPage } from '../settings.jsx';
 import TitleBar from './TitleBar.jsx';
 import Sidebar from './Sidebar.jsx';
