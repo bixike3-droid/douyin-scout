@@ -44,6 +44,7 @@ def main(default_root=None):
     parser.add_argument("--ready-file", type=Path, help="将本地验证连接信息写入指定文件")
     parser.add_argument("--screenshot", type=Path, help="启动后保存窗口截图并退出")
     parser.add_argument("--attach", nargs="*", type=Path, default=[], help="在新窗口中添加本机文件")
+    parser.add_argument("--frontend", help="开发模式：窗口直接加载该地址（如 http://127.0.0.1:5173/），适合 Vite 热更新")
     args = parser.parse_args()
     from ..desktop.runtime import prepare_runtime
     from .gateway import Gateway
@@ -82,7 +83,7 @@ def main(default_root=None):
         gateway.bridge_js = bytes(js.readAll()).decode("utf-8")
         js.close()
     gateway.native = True
-    server = Server(create_app(paths, gateway=gateway))
+    server = Server(create_app(paths, gateway=gateway), port=args.port)
     server.start()
 
     class Bridge(QObject):
@@ -114,9 +115,16 @@ def main(default_root=None):
         def openDataFolder(self):
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(paths.data_dir)))
 
+    allowed_ports = {server.port}
+    if args.frontend:
+        from urllib.parse import urlsplit
+        _dev_port = urlsplit(args.frontend).port
+        if _dev_port:
+            allowed_ports.add(_dev_port)
+
     class Page(QWebEnginePage):
         def acceptNavigationRequest(self, url, kind, main_frame):
-            if url.scheme() in ("http", "https") and url.host() == "127.0.0.1" and url.port() == server.port:
+            if url.scheme() in ("http", "https") and url.host() == "127.0.0.1" and url.port() in allowed_ports:
                 return True
             if url.toString() == "about:blank":
                 return True
@@ -216,7 +224,8 @@ def main(default_root=None):
         else:
             request.cancel()
     profile.downloadRequested.connect(save_download)
-    view.load(QUrl(f"http://127.0.0.1:{server.port}/#token={gateway.token}"))
+    frontend = (args.frontend or f"http://127.0.0.1:{server.port}").rstrip("/")
+    view.load(QUrl(f"{frontend}/#token={gateway.token}"))
     window.show()
     if args.screenshot:
         def capture():
