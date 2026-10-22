@@ -183,6 +183,8 @@ class DesktopService:
         if api_key.strip():
             llm["api_key"] = api_key.strip()
         llm.update({"provider": "deepseek", "model": model})
+        # 旧版本写过 agent_engine；引擎已统一，顺手清掉旧键。
+        llm.pop("agent_engine", None)
         effort = (reasoning_effort or "").strip().lower()
         if effort in ("low", "high", "max"):
             llm["reasoning_effort"] = effort

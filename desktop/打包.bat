@@ -30,6 +30,7 @@ REM onedir 不再自解压到临时目录；版本信息写进 exe 属性，避�
     --add-data "config/default.yaml;config" ^
     --add-data "src/scout/desktop/assets;scout/desktop/assets" ^
     --add-data "src/scout/db/migrations;scout/db/migrations" ^
+    --add-data "src/scout/skills;scout/skills" ^
     --collect-all playwright ^
     --exclude-module imageio_ffmpeg ^
     --collect-all pypdfium2 ^

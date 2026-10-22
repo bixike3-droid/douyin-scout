@@ -318,6 +318,8 @@ class LLMConfig:
     避免 api_key 和普通配置混在一起被误提交。
     """
     provider: str = "deepseek"
+    codex_executable: str = "codex"
+    python_executable: str = ""  # Empty: source interpreter, or system Python in packaged builds.
     api_key: str = ""
     base_url: str = "https://api.deepseek.com"
     model: str = "deepseek-flash"

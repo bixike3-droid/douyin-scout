@@ -24,6 +24,11 @@ def test_settings_store_model_and_effort(tmp_path, monkeypatch):
     data = service.settings()
     assert data["model"] == "deepseek-v4-pro"
     assert data["reasoning_effort"] == "low"
+    assert "agent_engine" not in data
+    service.save_settings("", "deepseek-flash", "low")
+    assert load_config(paths).llm.api_key == "sk-local-test-abcdefghijkl"
+    service.save_settings("", "deepseek-flash", "high")
+    assert service.settings()["model"] == "deepseek-flash"
 
 
 def test_configuration_survives_restart_and_bundle_change(tmp_path, monkeypatch):

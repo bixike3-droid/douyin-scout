@@ -180,7 +180,7 @@ const MODEL_OPTIONS = [
 
 function Composer({
   draft, onDraft, uploads, onRemoveUpload, onOpenFile, onPickFiles, onAddFiles,
-  onSend, onStop, sending, active, ready, pendingSteer, model, onPickModel, engine, hint,
+  onSend, onStop, sending, active, ready, pendingSteer, model, onPickModel, hint,
 }) {
   const textarea = useRef(null);
   const canSend = active ? !!ready : draft.trim().length > 0 || uploads.length > 0;
@@ -266,9 +266,6 @@ function Composer({
               onChange={onPickModel}
               options={modelOptions}
             />
-            {engine === 'codex' ? (
-              <span className="rounded border border-line px-1.5 py-[3px] text-[10px] text-muted">Codex</span>
-            ) : null}
           </div>
 
           <div className="flex items-center gap-2.5">
@@ -518,7 +515,6 @@ export default function Workspace({
             pendingSteer={pendingSteer}
             model={settings?.model || 'deepseek-flash'}
             onPickModel={onPickModel}
-            engine={settings?.agent_engine}
             hint={active ? job?.message?.slice(0, 45) : ''}
           />
         </section>

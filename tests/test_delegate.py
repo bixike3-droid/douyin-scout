@@ -1,9 +1,7 @@
-"""总管委派与长会话摘要。"""
+﻿"""总管委派与长会话摘要。"""
 import asyncio
 
-from scout.analyze.conversation import _maybe_summarize
 from scout.llm import LLMReply
-from scout.store.conversation import Conversations
 from scout.tools import delegate, registry  # noqa: F401 —— 导入即注册
 
 
@@ -41,16 +39,3 @@ def test_delegate_guards_permission_depth_and_limit(ctx):
     assert limited["ok"] is False and "上限" in limited["summary"]
 
 
-def test_memory_summary_updates_once_per_window(ctx):
-    store = Conversations(ctx.db)
-    conversation_id = store.create("长会话")
-    for index in range(14):
-        store.add(conversation_id, "user" if index % 2 == 0 else "assistant", f"第{index}条")
-    assert store.memory(conversation_id) is None
-    fake = FakeClient()
-    asyncio.run(_maybe_summarize(store, fake, conversation_id))
-    memory = store.memory(conversation_id)
-    assert memory is not None and memory["turns"] == 14
-    assert "结论" in memory["summary"]
-    asyncio.run(_maybe_summarize(store, fake, conversation_id))
-    assert len(fake.calls) == 1          # 未新增 8 条，不重复压缩

@@ -173,17 +173,6 @@ export function SettingsPage({
                       </Select>
                     </Field>
                   </div>
-
-                  <Field label="对话引擎">
-                    <Select
-                      aria-label="对话引擎"
-                      value={values.agent_engine || 'native'}
-                      onChange={(agent_engine) => setValues({ ...values, agent_engine })}
-                    >
-                      <option value="native">源镜</option>
-                      <option value="codex">Codex · 试用</option>
-                    </Select>
-                  </Field>
                 </div>
               </Card>
             </form>

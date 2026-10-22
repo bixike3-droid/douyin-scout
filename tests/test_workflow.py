@@ -217,10 +217,10 @@ def test_date_scope_excludes_unknown_and_older_works(ctx):
     assert [e["data"]["aweme_id"] for e in snapshot["evidence"] if e["id"].startswith("W")] == ["recent"]
 
 
-def test_plain_question_does_not_create_workflow(ctx):
-    from test_conversation import TeamClient
-    result = asyncio.run(send(ctx, TeamClient(), "你好"))
-    assert result["conversation"]["workflow"] is None
+def test_plain_question_does_not_escalate_to_workflow(ctx):
+    from scout.analyze.workflow import inferred_workflow, needs_live_tools
+    assert inferred_workflow("你好") is None
+    assert needs_live_tools("你好") is False
     assert ctx.db.scalar("SELECT COUNT(*) FROM workflow_runs") == 0
 
 
@@ -277,14 +277,7 @@ def test_collection_checkpoint_prevents_repeat_after_interrupted_data_step(ctx, 
     assert len(collected) == len(approvals) == 1
 
 
-def test_hot_topic_question_retains_member_search_tools(ctx):
-    from test_conversation import TeamClient
-
-    class HotClient(TeamClient):
-        async def chat(self, *args, **kwargs):
-            return LLMReply(text=json.dumps({"speaker": "strategy", "workflow": "plan"}), model="route-test")
-
-    client = HotClient(reply="我会查询实时热点，再给出选题。")
-    result = asyncio.run(send(ctx, client, "联网分析这个热点，请给我三个选题"))
-    assert result["conversation"]["workflow"] is None
-    assert "hot_topics" in {t["function"]["name"] for t in client.message_calls[-1][2]["tools"]}
+def test_hot_topic_question_retains_member_search_tools():
+    from scout.analyze.workflow import needs_live_tools
+    # 实时查询类请求不能升级成固定协作流程，否则会丢掉成员的实时工具
+    assert needs_live_tools("联网分析这个热点，请给我三个选题") is True

@@ -164,7 +164,7 @@ def create_app(paths, *, gateway=None, dist=None):
             raise ValueError("请在当前任务结束后保存模型设置")
         body = await request.json()
         return gateway.service.save_settings(str(body.get("api_key", "")), str(body.get("model", "")),
-                                              body.get("reasoning_effort"), body.get("agent_engine"))
+                                              body.get("reasoning_effort"))
 
     @app.put("/api/preferences")
     async def preferences(request: Request):
