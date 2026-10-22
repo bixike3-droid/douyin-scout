@@ -298,8 +298,29 @@ def main(default_root=None):
             request.cancel()
     profile.downloadRequested.connect(save_download)
     frontend = (args.frontend or f"http://127.0.0.1:{server.port}").rstrip("/")
+    def round_window_corners(window):
+        """Win11 原生圆角（DWMWA_WINDOW_CORNER_PREFERENCE）。
+
+        我们没有标题栏，DWM 默认不会给圆角；但又必须保留 WS_CAPTION 才能拿到
+        最小化动画，所以圆角只能显式告诉 DWM。Win10 上调用会失败，忽略即可。
+        """
+        if sys.platform != "win32":
+            return
+        import ctypes
+        try:
+            hwnd = int(window.winId())
+            DWMWA_WINDOW_CORNER_PREFERENCE = 33
+            DWMWCP_ROUND = 2
+            value = ctypes.c_int(DWMWCP_ROUND)
+            ctypes.windll.dwmapi.DwmSetWindowAttribute(
+                hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, ctypes.byref(value), ctypes.sizeof(value)
+            )
+        except (OSError, AttributeError):
+            logging.info("round corners unsupported on this system")
+
     view.load(QUrl(f"{frontend}/#token={gateway.token}"))
     window.show()
+    round_window_corners(window)
     if args.screenshot:
         def capture():
             args.screenshot.parent.mkdir(parents=True, exist_ok=True)

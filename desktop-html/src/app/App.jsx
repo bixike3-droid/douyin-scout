@@ -440,7 +440,7 @@ export default function App() {
 
   return (
     <div
-      className={`grid h-[100dvh] min-w-[760px] overflow-hidden border border-line bg-bg ${collapsed ? 'grid-cols-[66px_minmax(0,1fr)]' : 'grid-cols-[230px_minmax(0,1fr)]'} grid-rows-[44px_minmax(0,1fr)]`}
+      className={`grid h-[100dvh] min-w-[760px] overflow-hidden bg-bg ${collapsed ? 'grid-cols-[66px_minmax(0,1fr)]' : 'grid-cols-[230px_minmax(0,1fr)]'} grid-rows-[44px_minmax(0,1fr)]`}
       onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
       onDragLeave={(event) => { if (!event.relatedTarget) setDragging(false); }}
       onDrop={(event) => {
