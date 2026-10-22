@@ -25,7 +25,9 @@ export default function TitleBar({ project, native }) {
       <div className="flex items-center gap-2.5 whitespace-nowrap">
         <img src="/brand.png" alt="" className="h-5 w-5 rounded-[5px]" />
         <span className="text-[13px] font-[550] tracking-[0.5px] text-text">源镜</span>
-        <span className="border-l border-line pl-3 text-[11px] tracking-[0.4px] text-muted">工作空间</span>
+        <span className="border-l border-line pl-3 text-[11px] tracking-[0.4px] text-muted">
+          工作空间{import.meta.env.DEV ? ' · dev' : ''}
+        </span>
       </div>
 
       <span className="pointer-events-none mx-auto rounded-full border border-line bg-[color-mix(in_srgb,var(--bg)_55%,transparent)] px-2.5 py-[3px] text-[11px] tracking-[0.3px] text-muted">

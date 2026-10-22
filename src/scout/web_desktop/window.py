@@ -107,8 +107,17 @@ def main(default_root=None):
             def syscommand(code):
                 import ctypes
                 hwnd = int(window.winId())
-                ctypes.windll.user32.PostMessageW(hwnd, 0x0112, code, 0)
-                return True
+                ok = bool(ctypes.windll.user32.PostMessageW(hwnd, 0x0112, code, 0))
+                logging.info("windowAction %s -> WM_SYSCOMMAND 0x%X hwnd=%s posted=%s minimized=%s",
+                             action, code, hwnd, ok, window.isMinimized())
+                try:
+                    probe = Path(__file__).resolve().parents[3] / "desktop-html" / "window-actions.log"
+                    from datetime import datetime
+                    with probe.open("a", encoding="utf-8") as handle:
+                        handle.write(f"{datetime.now():%H:%M:%S} {action} hwnd={hwnd} posted={ok}\n")
+                except OSError:
+                    pass
+                return ok
 
             is_windows = sys.platform == "win32"
             if action == "minimize":
