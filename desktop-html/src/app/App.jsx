@@ -4,7 +4,7 @@ import {
   Target, Users, X, BarChart3, FolderOpen,
 } from 'lucide-react';
 import { api, authToken, nativeBridge, uploadFile, dateLabel } from '../api.js';
-import { FilePreview, Gallery } from '../components.jsx';
+import { FilePreview, Gallery } from '../ui/media.jsx';
 import { Library, DataPage, Benchmarks, Reports } from '../features/pages.jsx';
 import { SettingsPage } from '../settings.jsx';
 import TitleBar from './TitleBar.jsx';

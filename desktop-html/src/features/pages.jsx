@@ -4,7 +4,7 @@ import {
   FolderOpen, Loader2, Plus, RefreshCw, Search, Users, X,
 } from 'lucide-react';
 import { api, dateLabel } from '../api.js';
-import { FileTile, Markdown, Modal } from '../components.jsx';
+import { FileTile, Markdown, Modal } from '../ui/media.jsx';
 import { Badge, Button, Card, EmptyState, Field, Input, Textarea, cn } from '../ui/kit.jsx';
 
 const EMPTY = '—';

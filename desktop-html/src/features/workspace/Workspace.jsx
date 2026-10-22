@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import {
   Choices, CopyButton, FileTile, Markdown, Thought, ToolSteps, parseChoices,
-} from '../../components.jsx';
+} from '../../ui/media.jsx';
 import { Button, cn } from '../../ui/kit.jsx';
 
 const STARTERS = [

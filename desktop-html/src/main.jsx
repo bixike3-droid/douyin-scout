@@ -1,10 +1,7 @@
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './app/App.jsx';
-// 顺序要紧：legacy 先进层，tailwind 的 utilities 后进层 → utilities 才能覆盖旧样式
-import './legacy.css';
-import './tailwind.css';
-import './theme.css';
+import './styles.css';
 
 class ErrorBoundary extends React.Component {
   state = { error: null };
