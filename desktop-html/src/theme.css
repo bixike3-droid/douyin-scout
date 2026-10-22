@@ -1,0 +1,707 @@
+/* ---------------------------------------------------------------
+   新的界面皮肤
+   规则：只针对旧的 class 名（.sidebar / .composer / .data-table …）覆盖，
+   绝不写裸元素选择器，避免压掉 Tailwind 工具类（legacy 层里的老样式优先级别更低）。
+   色板沿用 :root 里的 CSS 变量，深浅色自动跟随。
+   --------------------------------------------------------------- */
+
+:root {
+  --radius-card: 12px;
+  --ring: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent);
+  --shadow-1: 0 1px 2px rgb(16 18 22 / 0.05);
+  --shadow-2: 0 2px 8px rgb(16 18 22 / 0.06), 0 12px 32px rgb(16 18 22 / 0.08);
+}
+
+/* ---------------------------------------------------------- 标题栏 */
+
+.app-chrome {
+  height: 44px;
+  padding-left: 18px;
+  background: color-mix(in srgb, var(--sidebar) 85%, var(--bg));
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: saturate(140%) blur(12px);
+}
+
+.app-brand span {
+  letter-spacing: 0.5px;
+  font-weight: 550;
+}
+
+.app-brand b {
+  font-size: 11px;
+  letter-spacing: 0.4px;
+}
+
+.chrome-context {
+  font-size: 11px;
+  letter-spacing: 0.3px;
+  padding: 3px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg) 55%, transparent);
+}
+
+.window-controls button {
+  width: 42px;
+  transition: background-color 0.12s ease;
+}
+
+/* ------------------------------------------------------------ 侧栏 */
+
+.sidebar {
+  background: color-mix(in srgb, var(--sidebar) 92%, var(--bg));
+}
+
+.sidebar-top {
+  padding: 14px 12px 10px;
+  gap: 8px;
+}
+
+.new-chat {
+  border-radius: 10px;
+  padding: 9px 11px;
+  font-size: 12.5px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  box-shadow: var(--shadow-1);
+  transition: transform 0.12s ease, box-shadow 0.16s ease, border-color 0.16s ease;
+}
+
+.new-chat:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 3px 10px rgb(16 18 22 / 0.08);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+.new-chat kbd {
+  font: 10px/1 var(--font-mono);
+  letter-spacing: 0.3px;
+  padding: 3px 5px;
+  border-radius: 5px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--subtle);
+}
+
+.sidebar nav {
+  padding: 2px 10px 10px;
+  gap: 2px;
+}
+
+.sidebar nav button,
+.sidebar-settings {
+  border-radius: 9px;
+  padding: 9px 11px;
+  min-height: 34px;
+  font-size: 12.5px;
+  color: var(--secondary);
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+.sidebar nav button:hover,
+.sidebar-settings:hover {
+  background: color-mix(in srgb, var(--hover) 78%, transparent);
+  color: var(--text);
+}
+
+.sidebar nav button.active,
+.sidebar-settings.active {
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 500;
+  box-shadow: var(--shadow-1);
+}
+
+/* 去掉老版本左侧那条竖线，改成整块圆角选中 */
+.sidebar nav button.active::before {
+  display: none;
+}
+
+.sidebar nav button.active svg {
+  color: var(--accent);
+}
+
+.nav-dot {
+  width: 5px;
+  height: 5px;
+  margin-left: auto;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
+.history-section {
+  margin: 6px 12px 0;
+  padding-top: 14px;
+}
+
+.history-heading {
+  font-size: 10.5px;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  padding: 0 6px 8px;
+}
+
+.history-heading label {
+  text-transform: none;
+  letter-spacing: 0;
+  gap: 4px;
+  border-radius: 6px;
+  padding: 2px 4px;
+}
+
+.history-heading label:focus-within {
+  background: var(--subtle);
+}
+
+.history-list button {
+  border-radius: 8px;
+  padding: 8px 9px;
+  font-size: 12px;
+  gap: 8px;
+  transition: background-color 0.12s ease;
+}
+
+.history-list button.selected {
+  background: var(--bg);
+  color: var(--text);
+  box-shadow: var(--shadow-1);
+}
+
+.sidebar-bottom {
+  padding: 8px 12px 12px;
+}
+
+.account-card {
+  border-radius: 10px;
+  padding: 10px 8px;
+  gap: 10px;
+  transition: background-color 0.12s ease;
+}
+
+.account-card:hover {
+  background: color-mix(in srgb, var(--hover) 70%, transparent);
+}
+
+.account-card .avatar {
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg));
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* --------------------------------------------------------- 主面板 */
+
+.workspace-header {
+  height: 52px;
+  padding: 0 20px;
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--bg) 92%, var(--sidebar));
+}
+
+.breadcrumb {
+  font-size: 11.5px;
+  gap: 8px;
+}
+
+.local-status {
+  font-size: 10.5px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  margin-right: 4px;
+}
+
+.active-job-button {
+  border-radius: 999px;
+  padding: 5px 10px;
+  font-size: 10.5px;
+}
+
+/* ---------------------------------------------------------- 欢迎页 */
+
+.welcome {
+  max-width: 700px;
+  margin: clamp(40px, 10vh, 120px) auto 24px;
+}
+
+/* 首屏入场：图标 → 标题 → 卡片依次浮现（纯 CSS，不依赖 JS） */
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+
+.welcome-mark,
+.welcome > .eyebrow,
+.welcome > h1,
+.welcome > p,
+.welcome-file-hint {
+  animation: rise-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.welcome > .eyebrow { animation-delay: 0.04s; }
+.welcome > h1 { animation-delay: 0.08s; }
+.welcome > p { animation-delay: 0.12s; }
+.welcome-file-hint { animation-delay: 0.26s; }
+
+.starter-grid button {
+  animation: rise-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+.starter-grid button:nth-child(1) { animation-delay: 0.16s; }
+.starter-grid button:nth-child(2) { animation-delay: 0.21s; }
+.starter-grid button:nth-child(3) { animation-delay: 0.26s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .welcome-mark,
+  .welcome > .eyebrow,
+  .welcome > h1,
+  .welcome > p,
+  .welcome-file-hint,
+  .starter-grid button {
+    animation: none !important;
+  }
+}
+
+.welcome-mark {
+  width: 62px;
+  height: 62px;
+  border-radius: 19px;
+  margin-bottom: 22px;
+  border: 1px solid var(--line);
+  background: linear-gradient(160deg, color-mix(in srgb, var(--accent) 10%, var(--bg)), var(--bg));
+  box-shadow: 0 6px 22px rgb(20 30 60 / 0.07);
+}
+
+.welcome-mark img {
+  width: 40px;
+  height: 40px;
+}
+
+.eyebrow {
+  font-size: 10.5px;
+  letter-spacing: 2.4px;
+  color: var(--muted);
+  margin-bottom: 14px;
+}
+
+.welcome h1 {
+  font-size: 30px;
+  font-weight: 560;
+  letter-spacing: -1px;
+  line-height: 1.45;
+}
+
+.welcome > p {
+  font-size: 13px;
+  margin-top: 12px;
+}
+
+.starter-grid {
+  gap: 12px;
+  margin-top: 34px;
+}
+
+.starter-grid button {
+  border-radius: 14px;
+  padding: 18px 16px 16px;
+  min-height: 118px;
+  background: var(--bg);
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease, border-color 0.16s ease;
+}
+
+.starter-grid button:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 10px 28px rgb(20 30 60 / 0.09);
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line));
+}
+
+.starter-grid button > svg:first-child {
+  color: var(--accent);
+  margin-bottom: 15px;
+}
+
+.starter-grid strong {
+  font-size: 13.5px;
+}
+
+.starter-grid span {
+  font-size: 11px;
+  line-height: 1.6;
+}
+
+.welcome-file-hint {
+  margin-top: 22px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ------------------------------------------------------------ 消息 */
+
+.messages {
+  max-width: 760px;
+  padding: 30px 26px 26px;
+}
+
+.composer-area {
+  max-width: 760px;
+  padding: 4px 26px 14px;
+}
+
+.message {
+  margin-bottom: 26px;
+}
+
+.message-meta {
+  font-size: 11.5px;
+  gap: 7px;
+  margin-bottom: 7px;
+}
+
+.user-bubble {
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg));
+  border: 1px solid color-mix(in srgb, var(--accent) 14%, var(--line));
+  border-radius: 14px 14px 4px 14px;
+  padding: 11px 15px;
+  font-size: 13.5px;
+  line-height: 1.8;
+}
+
+.markdown {
+  font-size: 13.5px;
+  line-height: 1.9;
+}
+
+.markdown h1 {
+  font-size: 19px;
+}
+
+.markdown h2 {
+  font-size: 16px;
+}
+
+.markdown h3 {
+  font-size: 13.5px;
+}
+
+.markdown pre {
+  border-radius: 10px;
+  font-size: 11.5px;
+}
+
+.resume-card {
+  border-radius: 12px;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--accent) 5%, var(--subtle));
+  border-color: color-mix(in srgb, var(--accent) 18%, var(--line));
+}
+
+/* ---------------------------------------------------------- 输入区 */
+
+.composer {
+  border-radius: 18px;
+  border-color: color-mix(in srgb, var(--muted) 28%, var(--line));
+  box-shadow: 0 6px 24px rgb(20 30 60 / 0.07);
+  transition: box-shadow 0.18s ease, border-color 0.18s ease;
+}
+
+.composer:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  box-shadow: 0 6px 26px rgb(20 30 60 / 0.1), var(--ring);
+}
+
+.composer textarea {
+  font-size: 13.5px;
+  padding: 16px 18px 6px;
+  min-height: 74px;
+}
+
+.composer-toolbar {
+  padding: 4px 12px 10px;
+}
+
+.model-chip {
+  font-size: 10.5px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--subtle);
+  color: var(--secondary);
+}
+
+.model-chip:hover {
+  color: var(--text);
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--line));
+}
+
+.send-button {
+  width: 32px;
+  height: 32px;
+  background: var(--accent);
+  color: #fff;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+
+.send-button:hover:not(:disabled) {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.send-button.stop-button {
+  background: var(--text);
+  color: var(--bg);
+}
+
+.composer-footnote {
+  font-size: 10px;
+  padding-top: 9px;
+}
+
+/* ------------------------------------------------------ 标准页面 */
+
+/* 按钮统一到强调色，别再是黑块 */
+.primary {
+  background: var(--accent);
+  color: #fff;
+  border-radius: 9px;
+  min-height: 33px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: 0 1px 2px rgb(16 18 22 / 0.12);
+  transition: filter 0.14s ease, transform 0.14s ease;
+}
+
+.primary:hover:not(:disabled) {
+  filter: brightness(1.06);
+  transform: translateY(-1px);
+}
+
+.secondary {
+  border-radius: 9px;
+  min-height: 33px;
+  padding: 7px 14px;
+  font-size: 12.5px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  transition: background-color 0.14s ease, border-color 0.14s ease;
+}
+
+.secondary:hover:not(:disabled) {
+  background: var(--subtle);
+  border-color: color-mix(in srgb, var(--muted) 40%, var(--line));
+}
+
+.text-button {
+  font-size: 12px;
+  border-radius: 7px;
+}
+
+.standard-page {
+  padding: 26px 34px 24px;
+  max-width: 1220px;
+  width: 100%;
+  margin: 0 auto;
+}
+
+.page-heading {
+  margin-bottom: 22px;
+}
+
+.page-heading h1 {
+  font-size: 21px;
+  font-weight: 560;
+  letter-spacing: -0.5px;
+}
+
+.page-heading p {
+  font-size: 12px;
+  margin-top: 7px;
+}
+
+.section-toolbar {
+  margin-bottom: 16px;
+}
+
+.search-field {
+  border-radius: 9px;
+  padding: 8px 11px;
+  transition: border-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.search-field:focus-within {
+  box-shadow: var(--ring);
+}
+
+.audience-segments,
+.settings-tabs {
+  gap: 22px;
+  margin-bottom: 20px;
+}
+
+.audience-segments button,
+.settings-tabs button {
+  font-size: 12px;
+  padding-bottom: 11px;
+}
+
+.audience-segments .selected::after,
+.settings-tabs .selected::after {
+  height: 2px;
+  background: var(--accent);
+}
+
+/* 表格 */
+
+.data-table {
+  border-radius: 12px;
+  border-color: var(--line);
+  background: var(--bg);
+  box-shadow: var(--shadow-1);
+}
+
+.data-table table {
+  font-size: 12px;
+}
+
+.data-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  padding: 11px 14px;
+  font-size: 10.5px;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  background: color-mix(in srgb, var(--subtle) 80%, var(--bg));
+  backdrop-filter: blur(6px);
+}
+
+.data-table td {
+  padding: 13px 14px;
+}
+
+.data-table tbody tr {
+  transition: background-color 0.1s ease;
+}
+
+.data-table tbody tr:hover {
+  background: color-mix(in srgb, var(--subtle) 70%, transparent);
+}
+
+.status-tag {
+  border-radius: 999px;
+  padding: 3px 8px;
+  font-size: 10.5px;
+}
+
+.pagination {
+  margin-top: 16px;
+}
+
+/* 卡片型列表 */
+
+.library-row {
+  border-radius: 12px;
+  padding: 14px 16px;
+  border: 1px solid transparent;
+  transition: background-color 0.12s ease, border-color 0.12s ease;
+}
+
+.library-row:hover {
+  background: var(--subtle);
+  border-color: var(--line);
+}
+
+.benchmark-card {
+  border-radius: 14px;
+  padding: 18px;
+  background: var(--bg);
+  box-shadow: var(--shadow-1);
+  transition: transform 0.16s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.2s ease;
+}
+
+.benchmark-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-2);
+}
+
+.report-list > button {
+  border-radius: 12px;
+  padding: 16px 18px;
+  background: var(--bg);
+  transition: border-color 0.14s ease, box-shadow 0.16s ease, transform 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.report-list > button:hover {
+  background: var(--bg);
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--line));
+  box-shadow: var(--shadow-2);
+  transform: translateY(-2px);
+}
+
+.report-icon {
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--subtle));
+  color: var(--accent);
+}
+
+.empty-state {
+  min-height: 260px;
+}
+
+.empty-state > svg {
+  box-sizing: content-box;
+  padding: 13px;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 8%, var(--subtle));
+  color: var(--accent);
+  margin-bottom: 2px;
+}
+
+.empty-state h3 {
+  font-size: 14.5px;
+}
+
+/* 弹层 */
+
+.modal {
+  border-radius: 16px;
+  box-shadow: 0 30px 90px rgb(10 14 24 / 0.28);
+}
+
+.modal-backdrop {
+  backdrop-filter: blur(6px) saturate(120%);
+}
+
+.toast {
+  border-radius: 12px;
+  box-shadow: var(--shadow-2);
+  font-size: 12.5px;
+}
+
+.dropdown-menu {
+  border-radius: 11px;
+  padding: 5px;
+  box-shadow: var(--shadow-2);
+}
+
+.dropdown-menu button {
+  border-radius: 7px;
+  font-size: 12px;
+}
+
+.icon-button {
+  border-radius: 8px;
+  transition: background-color 0.12s ease, color 0.12s ease;
+}
+
+/* 减少动效偏好 */
+@media (prefers-reduced-motion: reduce) {
+  .starter-grid button,
+  .benchmark-card,
+  .report-list > button,
+  .new-chat,
+  .send-button {
+    transition: none !important;
+    transform: none !important;
+  }
+}

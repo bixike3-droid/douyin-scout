@@ -1,0 +1,5 @@
+/* 旧的手写设计系统整体降级到 legacy 层。
+   这样 Tailwind 的 utilities（同样在 utilities 层）才能覆盖它的元素/类规则；
+   否则无层级 CSS 恒优先，工具类全部失效（踩过一次）。
+   注意：本文件必须在 tailwind.css 之前 import，层顺序才会是 legacy 再到 utilities。 */
+@import "./style.css" layer(legacy);
