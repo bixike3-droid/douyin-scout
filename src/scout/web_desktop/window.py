@@ -121,41 +121,12 @@ def main(default_root=None):
 
             is_windows = sys.platform == "win32"
             if action == "minimize":
-                if window._anim_group is not None:
-                    return
-                from PySide6.QtCore import QRect as _Rect
-                start = window.geometry()
-                screen = window.screen().availableGeometry()
-                shrink = _Rect(
-                    start.center().x() - start.width() // 6,
-                    screen.bottom() - 90,
-                    max(180, start.width() // 3),
-                    max(120, start.height() // 3),
-                )
-
-                def done():
-                    window._anim_minimized = True
+                if not (is_windows and syscommand(0xF020)):       # SC_MINIMIZE
                     window.showMinimized()
-                    window.setWindowOpacity(1.0)
-                    window.setGeometry(start)
-
-                window.animate_to(shrink, 0.0, done, duration=160)
             elif action == "maximize":
-                if window._anim_group is not None:
-                    return
-                from PySide6.QtCore import QRect as _Rect
-                screen = window.screen().availableGeometry()
-                if window.isMaximized():
-                    start = window.geometry()
-                    target = getattr(window, "_normal_geometry", None) or start.adjusted(40, 40, -40, -40)
-                    window.setWindowState(Qt.WindowState.WindowNoState)
-                    window.setGeometry(start)
-                    window.animate_to(target, 1.0, lambda: None, duration=170)
-                else:
-                    window._normal_geometry = window.geometry()
-                    window.animate_to(_Rect(screen), 1.0,
-                                      lambda: window.setWindowState(Qt.WindowState.WindowMaximized),
-                                      duration=170)
+                code = 0xF120 if window.isMaximized() else 0xF030  # SC_RESTORE / SC_MAXIMIZE
+                if not (is_windows and syscommand(code)):
+                    window.showNormal() if window.isMaximized() else window.showMaximized()
             elif action == "close":
                 window.close()
             elif action == "drag" and window.windowHandle():
@@ -216,14 +187,19 @@ def main(default_root=None):
                 super().dropEvent(event)
 
     class Window(QMainWindow):
+        # 抄 DSH：窗口保留原生框架（WS_CAPTION 在），只把客户区延伸到标题栏位置。
+        # 这样 DWM 仍把窗口当“有标题栏的普通窗口”，最小化/最大化动画、Snap、
+        # 任务栏缩略图全部是系统原生行为；我们只负责在客户区里画东西。
+        TITLE_HEIGHT = 44
+        BUTTON_WIDTH = 46
+        RESIZE_EDGE = 6
+
         def __init__(self):
             super().__init__()
             self.setWindowTitle("源镜")
-            self.setWindowFlags(Qt.WindowType.Window | Qt.WindowType.FramelessWindowHint)
+            self.setWindowFlags(Qt.WindowType.Window)
             self.resize(1440, 960)
             self.setMinimumSize(1040, 680)
-            self._anim_group = None
-            self._anim_minimized = False
             self.preferences = QSettings("源镜", "HTML窗口")
             saved = self.preferences.value("geometry")
             if saved:
@@ -232,49 +208,50 @@ def main(default_root=None):
             self.setCentralWidget(view)
             app.installEventFilter(self)
 
-        # ---- 自绘最小化/还原动画（不依赖 DWM）----
-        def animate_to(self, target, opacity, done, duration=170):
-            from PySide6.QtCore import QEasingCurve, QParallelAnimationGroup, QPropertyAnimation
-            if self._anim_group is not None:
-                return self._fallback(done)
-            start = self.geometry()
-            group = QParallelAnimationGroup(self)
-            geo = QPropertyAnimation(self, b"geometry", group)
-            geo.setDuration(duration)
-            geo.setStartValue(start)
-            geo.setEndValue(target)
-            geo.setEasingCurve(QEasingCurve.Type.OutCubic)
-            fade = QPropertyAnimation(self, b"windowOpacity", group)
-            fade.setDuration(duration)
-            fade.setStartValue(self.windowOpacity())
-            fade.setEndValue(opacity)
-            fade.setEasingCurve(QEasingCurve.Type.OutCubic)
+        def nativeEvent(self, event_type, message):
+            if sys.platform != "win32":
+                return super().nativeEvent(event_type, message)
+            import ctypes
+            from ctypes import wintypes
+            msg = wintypes.MSG.from_address(int(message))
 
-            def finished():
-                self._anim_group = None
-                self._anim_restore = start
-                done()
+            # WM_NCCALCSIZE：把非客户区高度压成 0，客户区铺满整个窗口
+            if msg.message == 0x0083 and msg.wParam:
+                return True, 0
 
-            group.finished.connect(finished)
-            self._anim_group = group
-            group.start()
+            # WM_NCHITTEST：告诉系统哪里是拖动区 / 缩放边，命中全靠系统，动画才不会丢
+            if msg.message == 0x0084:
+                rect = wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(int(self.winId()), ctypes.byref(rect))
+                scale = self.devicePixelRatioF() or 1.0
+                point_x = ctypes.c_short(msg.lParam & 0xFFFF).value
+                point_y = ctypes.c_short((msg.lParam >> 16) & 0xFFFF).value
+                x = (point_x - rect.left) / scale
+                y = (point_y - rect.top) / scale
+                width, height = self.width(), self.height()
 
-        def _fallback(self, done):
-            done()
+                if not self.isMaximized():
+                    edge = self.RESIZE_EDGE
+                    left, right = x < edge, x > width - edge
+                    top, bottom = y < edge, y > height - edge
+                    if top and left: return True, 13      # HTTOPLEFT
+                    if top and right: return True, 14     # HTTOPRIGHT
+                    if bottom and left: return True, 16   # HTBOTTOMLEFT
+                    if bottom and right: return True, 17  # HTBOTTOMRIGHT
+                    if left: return True, 10              # HTLEFT
+                    if right: return True, 11             # HTRIGHT
+                    if top: return True, 12               # HTTOP
+                    if bottom: return True, 15            # HTBOTTOM
 
-        def changeEvent(self, event):
-            if event.type() == QEvent.Type.WindowStateChange and self._anim_minimized and not self.isMinimized():
-                self._anim_minimized = False
-                from PySide6.QtCore import QEasingCurve, QPropertyAnimation
-                fade = QPropertyAnimation(self, b"windowOpacity", self)
-                fade.setDuration(180)
-                fade.setStartValue(0.0)
-                fade.setEndValue(1.0)
-                fade.setEasingCurve(QEasingCurve.Type.OutCubic)
-                fade.start()
-                self._anim_group = fade
-                fade.finished.connect(lambda: setattr(self, "_anim_group", None))
-            super().changeEvent(event)
+                if y < self.TITLE_HEIGHT:
+                    # 右侧三个按钮交给网页（HTCLIENT），其余标题区交给系统拖动（HTCAPTION）
+                    if x >= width - self.BUTTON_WIDTH * 3:
+                        return True, 1
+                    return True, 2
+
+                return True, 1
+
+            return super().nativeEvent(event_type, message)
 
         def eventFilter(self, watched, event):
             if event.type() == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton and not self.isMaximized() and hasattr(watched, "window") and watched.window() == self:
