@@ -172,7 +172,8 @@ def create_app(paths, *, gateway=None, dist=None):
 
     @app.get("/api/hot")
     def hot():
-        return gateway.service.hot_snapshot()
+        # 有 AI 评估过的最新看板就用它；否则退回本地快照（不联网）
+        return gateway.last_hot or gateway.service.hot_snapshot()
 
     @app.get("/api/job")
     def job():

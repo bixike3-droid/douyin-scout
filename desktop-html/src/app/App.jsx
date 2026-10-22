@@ -1,11 +1,11 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   CircleAlert, FolderArchive, History, Loader2, MessageSquare, FileText,
-  Target, Users, X, BarChart3, FolderOpen,
+  Target, Users, X, BarChart3, FolderOpen, Flame,
 } from 'lucide-react';
 import { api, authToken, nativeBridge, uploadFile, dateLabel } from '../api.js';
 import { FilePreview, Gallery } from '../ui/media.jsx';
-import { Library, DataPage, Benchmarks, Reports } from '../features/pages.jsx';
+import { Library, DataPage, Benchmarks, Reports, Hot } from '../features/pages.jsx';
 import { SettingsPage } from '../settings.jsx';
 import TitleBar from './TitleBar.jsx';
 import Sidebar from './Sidebar.jsx';
@@ -13,6 +13,7 @@ import Workspace from '../features/workspace/Workspace.jsx';
 
 const NAVIGATION = [
   ['workspace', '工作台', MessageSquare],
+  ['hot', '实时热点', Flame],
   ['library', '素材库', FolderOpen],
   ['works', '作品数据', BarChart3],
   ['users', '互动受众', Users],
@@ -116,6 +117,12 @@ export default function App() {
       setSettings(previous);
       notify(error.message);
     }
+  }
+
+  /** 热点页点一条：把拆解请求写进输入框，回工作台继续聊 */
+  function askAbout(text) {
+    setDraft(text);
+    setView('workspace');
   }
 
   /* ------------------------------------------------------------ 任务 ---- */
@@ -453,7 +460,7 @@ export default function App() {
 
   return (
     <div
-      className={`grid h-[100dvh] min-w-[760px] overflow-hidden bg-bg ${collapsed ? 'grid-cols-[66px_minmax(0,1fr)]' : 'grid-cols-[230px_minmax(0,1fr)]'} grid-rows-[44px_minmax(0,1fr)]`}
+      className="grid h-[100dvh] min-w-[760px] overflow-hidden bg-bg grid-cols-[auto_minmax(0,1fr)] grid-rows-[44px_minmax(0,1fr)]"
       onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
       onDragLeave={(event) => { if (!event.relatedTarget) setDragging(false); }}
       onDrop={(event) => {
@@ -519,6 +526,8 @@ export default function App() {
           <div className="col-start-2 row-start-2 flex min-h-0 min-w-0 flex-col bg-bg">
             {view === 'library' ? (
               <Library openFile={openFile} openConversation={loadConversation} startJob={startJob} job={job} notify={notify} />
+            ) : view === 'hot' ? (
+              <Hot job={job} busy={busy} startJob={startJob} notify={notify} onAsk={askAbout} />
             ) : ['works', 'users', 'tasks'].includes(view) ? (
               <DataPage key={view} view={view} startJob={startJob} busy={busy} notify={notify} />
             ) : view === 'benchmarks' ? (

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import {
-  ArrowUpRight, BarChart3, ChevronLeft, ChevronRight, Database, Download, FileText,
-  FolderOpen, Loader2, Plus, RefreshCw, Search, Users, X,
+  ArrowUpRight, BarChart3, ChevronLeft, ChevronRight, CircleAlert, Database, Download, FileText,
+  Flame, FolderOpen, Loader2, Plus, RefreshCw, Search, Users, X,
 } from 'lucide-react';
 import { api, dateLabel } from '../api.js';
 import { FileTile, Markdown, Modal } from '../ui/media.jsx';
@@ -614,6 +614,101 @@ export function Reports({ notify, startJob, busy }) {
               <Button size="sm" onClick={save}>保存修改</Button>
             </footer>
           </Modal>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+
+/* ------------------------------------------------------------ 实时热点 */
+
+const MARK_TONE = {
+  可用: 'bg-[color-mix(in_srgb,var(--accent)_14%,var(--bg))] text-accent',
+  参考: 'bg-subtle text-secondary',
+  无关: 'bg-subtle text-muted',
+};
+
+export function Hot({ job, busy, startJob, onAsk, notify }) {
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+
+  function load() {
+    api('/hot')
+      .then((value) => setData(value))
+      .catch((error) => notify(error.message))
+      .finally(() => setLoading(false));
+  }
+
+  // 抓取任务结束后重新读一次（网关会把带 AI 评估的结果留在内存里）
+  useEffect(() => { load(); }, [job?.state]);
+
+  const topics = data?.topics || [];
+  const refreshing = job?.kind === 'hot' && job?.state === 'running';
+  const stamp = data?.fetched_at ? data.fetched_at.replace('T', ' ').slice(0, 16) : '';
+
+  return (
+    <div className="min-h-0 flex-1 overflow-auto">
+      <div className="mx-auto w-full max-w-[1180px] px-8 py-7">
+        <PageHeader title="实时热点" subtitle="抖音实时热榜，并按企业资料标出哪些能直接做内容。">
+          <Button variant="secondary" size="sm" disabled={refreshing || busy} onClick={() => startJob('hot')}>
+            {refreshing ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+            {refreshing ? '正在获取…' : '刷新热点'}
+          </Button>
+        </PageHeader>
+
+        {data?.note ? <p className="mb-4 text-[11px] text-muted">{data.note}</p> : null}
+
+        {data?.error ? (
+          <div className="mb-4 flex items-start gap-2 rounded-[10px] border border-[color-mix(in_srgb,var(--danger)_28%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_7%,var(--bg))] px-3.5 py-3 text-[12px] leading-relaxed text-danger">
+            <CircleAlert size={14} className="mt-px shrink-0" />
+            {data.error}
+          </div>
+        ) : null}
+
+        {loading ? <Loader /> : !topics.length ? (
+          <EmptyState
+            icon={Flame}
+            title="还没有热点数据"
+            desc="点「刷新热点」会打开抖音热榜抓一次，并按企业资料给每条打可用性标记。"
+            action={<Button size="sm" disabled={busy} onClick={() => startJob('hot')}>刷新热点</Button>}
+          />
+        ) : (
+          <ol className="m-0 list-none overflow-hidden rounded-[12px] border border-line bg-bg p-0">
+            {topics.map((topic, index) => (
+              <li
+                key={`${topic.word}-${index}`}
+                className="flex items-center gap-4 border-b border-line px-4 py-3 last:border-b-0 transition-colors hover:bg-subtle/60"
+              >
+                <span className={cn('w-5 shrink-0 text-center font-mono text-[11px]', index < 3 ? 'text-accent' : 'text-muted')}>
+                  {index + 1}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => onAsk(`借势分析抖音热点：「${topic.word}」${topic.heat ? `（当前热度 ${topic.heat}）` : ''}，结合我的账号定位给一个能直接执行的选题。`)}
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <strong className="block truncate text-[12.5px] font-medium text-text">{topic.word}</strong>
+                  {topic.why ? <small className="mt-1 block truncate text-[11px] text-muted">{topic.why}</small> : null}
+                </button>
+                {topic.mark ? (
+                  <span className={cn('shrink-0 rounded-full px-2 py-[3px] text-[10.5px]', MARK_TONE[topic.mark] || MARK_TONE['参考'])}>
+                    {topic.mark}
+                  </span>
+                ) : null}
+                <span className="w-[72px] shrink-0 text-right text-[11px] text-muted">{topic.heat ? number(topic.heat) : EMPTY}</span>
+                <ArrowUpRight size={13} className="shrink-0 text-muted" />
+              </li>
+            ))}
+          </ol>
+        )}
+
+        {topics.length ? (
+          <p className="mt-4 text-[11px] text-muted">
+            {stamp ? `抓取时间 ${stamp}` : ''}
+            {data?.usable ? ` · 其中 ${data.usable} 条可直接用` : ''}
+            {' · 点任意一条交给团队拆解'}
+          </p>
         ) : null}
       </div>
     </div>
