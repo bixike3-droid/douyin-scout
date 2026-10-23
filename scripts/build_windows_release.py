@@ -23,7 +23,7 @@ import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 STAGE = REPO / "dist/windows/源镜"
-VERSION = "0.11.0"
+VERSION = "0.11.1"
 DEFENDER = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Windows Defender" / "MpCmdRun.exe"
 
 
@@ -185,6 +185,18 @@ def build():
                    "pytest", "setuptools", "pip", "imageio_ffmpeg", "scout.web_desktop.window"):
         options += ["--exclude-module", module]
     PyInstaller.__main__.run(options)
+    # .NET 默认拒绝从“网络位置”加载程序集；用户从浏览器下载再解压时，
+    # pythonnet 和 WebView2 的 DLL 会因此加载失败。
+    (STAGE / "源镜.exe.config").write_text(
+        '<?xml version="1.0" encoding="utf-8"?>\n'
+        '<configuration>\n'
+        '  <startup>\n'
+        '    <supportedRuntime version="v4.0" sku=".NETFramework,Version=v4.7.2" />\n'
+        '  </startup>\n'
+        '  <runtime>\n'
+        '    <loadFromRemoteSources enabled="true" />\n'
+        '  </runtime>\n'
+        '</configuration>\n', encoding="utf-8")
     # This integration exposes only host-owned dynamic tools. Code Mode is
     # explicitly disabled in prepare_runtime; its separate host is not used.
     (STAGE / "_internal/codex_cli_bin/bin/codex-code-mode-host.exe").unlink(missing_ok=True)

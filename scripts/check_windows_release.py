@@ -28,6 +28,27 @@ def port():
         return handle.getsockname()[1]
 
 
+def stamp_zone_identifier(stage: Path) -> int:
+    """模拟“从浏览器下载 zip 再解压”：每个文件都带上 Zone.Identifier。
+
+    .NET 默认拒绝从网络位置加载程序集，这是用户机器上 pythonnet / WebView2
+    初始化失败的真实原因，所以验收必须在带标记的目录上跑。
+    """
+    if os.name != "nt":
+        return 0
+    stamped = 0
+    for path in stage.rglob("*"):
+        if not path.is_file():
+            continue
+        try:
+            with open(f"{path}:Zone.Identifier", "w", encoding="utf-8") as handle:
+                handle.write("[ZoneTransfer]\nZoneId=3\n")
+            stamped += 1
+        except OSError:
+            pass
+    return stamped
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--live", action="store_true")
@@ -39,6 +60,7 @@ def main():
         args.live = True
         args.archive = args.archive.resolve(strict=True)
     stage = args.package.resolve()
+    marked = stamp_zone_identifier(stage)
     directory = Path(tempfile.gettempdir()) / "yuanjing-release-qa" / ("run-" + str(time.time_ns()))
     directory.mkdir(parents=True)
     report = {"package": str(stage), "directory": str(directory), "checks": [], "model": "deepseek-flash" if args.live else None,
@@ -103,6 +125,7 @@ def main():
             time.sleep(.1)
         connection = json.loads(ready.read_text(encoding="utf-8"))
         origin = f"http://127.0.0.1:{connection['port']}"
+        record("mark_of_the_web_tolerated", stamped_files=marked)
 
         def api(path, body=None, method=None):
             headers = {"Authorization": "Bearer " + connection["token"]}

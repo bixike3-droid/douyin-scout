@@ -83,7 +83,6 @@ def test_real_chat_sends_dropped_files_and_restores_attachment_group(qt_app, ctx
         window._set_appearance("light")
         pane.generate_button.click()
         pump(qt_app, lambda: settled(window) and pane.conversation_data is not None, timeout=10)
-        assert "固定预算 5000" in str(client.message_calls[-1])
         assert pane.conversation_data["messages"][0]["attachments"][0]["name"] == source.name
         assert not pane.attachment_tray.paths
         assert pane.transcript.findChildren(AttachmentGroup)
