@@ -1,4 +1,4 @@
-﻿@echo off
+@echo off
 chcp 65001 >nul
 cd /d "%~dp0\.."
 
@@ -37,6 +37,8 @@ REM onedir 不再自解压到临时目录；版本信息写进 exe 属性，避�
     --collect-all pypdfium2_raw ^
     --collect-all py7zr ^
     --collect-all pillow_heif ^
+    --collect-all codex_cli_bin ^
+    --hidden-import codex_cli_bin ^
     --exclude-module PySide6.QtWebEngineCore ^
     --exclude-module PySide6.QtWebEngineWidgets ^
     --exclude-module PySide6.QtWebEngineQuick ^

@@ -6,6 +6,7 @@ import threading
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from ..tools.confirm import ConfirmationBroker
+from ..codex.control import RunControl
 from .actions import execute
 
 
@@ -69,7 +70,7 @@ class Operations(QObject):
     def start(self, kind, options=None):
         if self.busy:
             return False
-        options = {**(options or {}), "broker": self.broker}
+        options = {**(options or {}), "broker": self.broker, "control": RunControl()}
         thread = OperationThread(self.paths, kind, options)
         self.thread = thread
         thread.event.connect(self.event)
@@ -83,6 +84,9 @@ class Operations(QObject):
     def cancel(self):
         if self.thread:
             self.thread.cancel()
+
+    def steer(self, text):
+        return bool(self.thread and self.thread.options["control"].submit(text))
 
     @Slot()
     def _finished(self):

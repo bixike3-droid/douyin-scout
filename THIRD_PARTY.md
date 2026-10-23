@@ -16,6 +16,11 @@ Copyright (C) 2026 bixike3-droid and 源镜 contributors
 | Pydantic | 2.14.0 | MIT | 数据结构校验 |
 | PyInstaller | 6.22.3 | GPL-2.0 with exception | 仅用于打包，产物不受其许可传染 |
 | pytest | 9.1.1 | MIT | 测试 |
+| Pillow | 13.0.0 | MIT-CMU | 附件图片缩放及格式转换 |
+| pypdf | 6.21.1 | BSD-3-Clause | PDF 文本提取 |
+| pypdfium2 / PDFium | 5.14.0 | BSD-3-Clause / Apache-2.0 及依赖许可 | 扫描 PDF 页面渲染，随分发包保留依赖许可 |
+| imageio-ffmpeg | 0.6.0 | BSD-2-Clause | 随包提供视频解码程序 |
+| FFmpeg（Windows wheel 内置构建） | 以分发包版本为准 | GPL-3.0-or-later | 本地视频封面与抽帧；打包时保留对应许可文件及来源信息 |
 
 ## GPL-3.0 义务对照
 
@@ -36,3 +41,10 @@ Qt 采用 LGPL-3.0：动态链接使用不要求开源你的代码，但需要
 
 仓库内 `brand/` 下的名称与图形标志是项目方商标，**不在 GPL 授权范围内**。
 基于本项目二次开发或再分发时，请更换程序名称与图标，避免造成来源混淆。
+
+## Codex execution runtime
+
+The optional `openai-codex==0.163.0` dependency includes the pinned
+`openai-codex-cli-bin==0.163.0` runtime, distributed under Apache-2.0.
+Upstream: https://github.com/openai/codex . Product skill sources are maintained
+in `src/scout/skills/`; they are separate from personal Codex skills.

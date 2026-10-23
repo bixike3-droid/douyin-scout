@@ -12,5 +12,6 @@ from . import insight  # noqa: F401
 from . import enterprise_tools  # noqa: F401
 from . import attachments  # noqa: F401
 from . import attachment_workspace  # noqa: F401
+from . import workspace  # noqa: F401
 
 __all__ = ["registry", "web", "hot", "data", "collect", "delegate", "insight", "enterprise_tools", "attachments"]

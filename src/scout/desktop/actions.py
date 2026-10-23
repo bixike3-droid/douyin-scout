@@ -325,10 +325,13 @@ async def collect_comments(ctx, emit, options):
 
 
 async def execute(paths, kind, emit, options=None):
-    if kind not in ("login", "collect", "profile", "review", "plan", "enterprise", "chat", "benchmark", "comments"):
+    if kind not in ("login", "collect", "profile", "review", "plan", "enterprise", "chat", "benchmark", "comments", "chat_fork", "chat_compact"):
         raise ValueError("未知操作")
     ctx = AppContext.create(load_config(paths))
     try:
+        if kind in ("chat_fork", "chat_compact"):
+            from ..analyze.codex_sessions import manage
+            return await manage(ctx, (options or {})["conversation_id"], "fork" if kind == "chat_fork" else "compact", emit)
         if kind == "chat":
             from ..analyze.conversation import send
             from ..llm import DeepSeekClient
@@ -341,7 +344,7 @@ async def execute(paths, kind, emit, options=None):
                 conversation_id=options.get("conversation_id"), want_plan=bool(options.get("want_plan")),
                 emit=emit, agent_id=options.get("agent"), confirm=confirm,
                 workflow_run_id=options.get("workflow_run_id"), rerun=bool(options.get("rerun")),
-                chat_run_id=options.get("chat_run_id"), attachment_paths=options.get("attachment_paths"))
+                chat_run_id=options.get("chat_run_id"), attachment_paths=options.get("attachment_paths"), control=options.get("control"))
         if kind == "enterprise":
             from ..analyze.enterprise import generate
             from ..llm import DeepSeekClient

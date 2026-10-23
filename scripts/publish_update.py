@@ -15,7 +15,7 @@ import json
 from datetime import date
 from pathlib import Path
 
-BASE = "http://douyin.baodaoxiaoyuan.cn"  # 站点暂未启用证书，先用 http
+BASE = "https://douyin.baodaoxiaoyuan.cn"
 ROOT = Path(__file__).resolve().parents[1]
 
 

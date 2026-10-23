@@ -471,6 +471,8 @@ def test_settings_expose_model_and_effort(qt_app, ctx):
         assert window.model_input.currentText() == "deepseek-flash"
         assert window.effort_input.currentData() == "max"
         assert window.effort_input.currentText() == "高"
+        assert window.engine_input.currentData() == "native"
+        assert window.engine_input.findData("codex") >= 0
         assert [window.model_input.itemText(i) for i in range(window.model_input.count())][:2] == [
             "deepseek-flash", "deepseek-v4-pro"]
     finally:

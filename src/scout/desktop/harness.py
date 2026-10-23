@@ -7,7 +7,7 @@ import sys
 from PySide6.QtCore import Qt, Signal, QTimer, QEvent, QPropertyAnimation, QEasingCurve, QObject, QRunnable, QThreadPool, Slot, QSize
 from PySide6.QtGui import QTextBlockFormat, QTextCursor, QPixmap, QIcon
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QPushButton, QPlainTextEdit,
-    QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel, QFileDialog)
+    QScrollArea, QTabWidget, QSplitter, QDialog, QTextBrowser, QSizePolicy, QLabel, QFileDialog, QMenu)
 from ..analyze.agents import DEFAULT_AGENT_ID, TEAM, get as get_agent
 from .enterprise import EnterprisePage, report_time
 from .branding import brand_pixmap
@@ -788,6 +788,8 @@ class HarnessPage(EnterprisePage):
     cancel_requested = Signal()
     workflow_requested = Signal(int, bool)
     chat_resume_requested = Signal(int)
+    steer_requested = Signal(str)
+    session_action_requested = Signal(str)
     history_changed = Signal(object)
     report_selected = Signal(int)
     conversation_selected = Signal(int)
@@ -798,6 +800,10 @@ class HarnessPage(EnterprisePage):
         self.motion_enabled = True
         self.new_task_mode = True
         self.processing = False
+        self.controls_enabled = True
+        self.codex_ready = False
+        self._steer_pending = False
+        self._artifact_seen = set()
         self.workspace_data = None
         # 气泡的换行宽度与高度依赖视口宽度；窗口/分栏尺寸变化后合并重排一次。
         self._bubble_timer = QTimer(self)
@@ -1009,7 +1015,20 @@ class HarnessPage(EnterprisePage):
         self.plan_button.setObjectName("linkButton")
         self.plan_button.clicked.connect(self._request_plan)
         row.addWidget(self.plan_button)
+        self.session_button = QPushButton("会话")
+        self.session_button.setObjectName("linkButton")
+        session_menu = QMenu(self.session_button)
+        session_menu.addAction("另开方案").triggered.connect(lambda checked=False: self.session_action_requested.emit("fork"))
+        session_menu.addAction("整理上下文").triggered.connect(lambda checked=False: self.session_action_requested.emit("compact"))
+        self.session_button.setMenu(session_menu)
+        self.session_button.hide()
+        row.addWidget(self.session_button)
         row.addStretch()
+        self.steer_button = QPushButton("追加指令")
+        self.steer_button.setObjectName("linkButton")
+        self.steer_button.clicked.connect(self._steer)
+        self.steer_button.hide()
+        row.addWidget(self.steer_button)
         row.addWidget(self.generate_button)
         box.addLayout(row)
         main.addWidget(composer_box)
@@ -1131,6 +1150,10 @@ class HarnessPage(EnterprisePage):
         self.navigate_requested.emit("settings")
 
     def _generate(self):
+        if self.processing:
+            if self.codex_ready:
+                self._steer()
+            return
         request = self.composer.toPlainText().strip()
         if not request and self.attachment_tray.paths:
             request = "请阅读并分析这些附件，概括主要内容与需要注意的问题。"
@@ -1138,6 +1161,45 @@ class HarnessPage(EnterprisePage):
             self.notice.emit("请填写本次需求（不超过6000字）")
             return
         self.task_requested.emit(request, False)
+
+    def _steer(self):
+        text = self.composer.toPlainText().strip()
+        if not self.codex_ready or not text or self._steer_pending:
+            return
+        self._steer_pending = True
+        self.steer_button.setEnabled(False)
+        self.steer_requested.emit(text)
+
+    def set_codex_ready(self, ready):
+        self.codex_ready = ready
+        self.steer_button.setVisible(ready and self.processing)
+        self.steer_button.setEnabled(ready and not self._steer_pending)
+        self.composer.setEnabled(self.controls_enabled or ready)
+        self.composer.setPlaceholderText("补充要求，按 Enter 追加到当前任务…" if ready else "说点什么，或拖入图片、视频、文档…")
+
+    def steer_result(self, event):
+        self._steer_pending = False
+        self.steer_button.setEnabled(self.codex_ready)
+        if event.get("accepted"):
+            if self.composer.toPlainText().strip() == event["text"]:
+                self.composer.clear()
+            self.end_answer()
+            for widget in self._message_widgets({"id": event.get("message_id"), "role": "user", "content": event["text"], "status": "complete"}):
+                self.transcript_layout.addWidget(widget)
+            self._scroll_chat_bottom()
+        else:
+            self.notice.emit(event.get("error") or "指令未送达，请重试")
+
+    def show_artifacts(self, items):
+        fresh = [a for a in items if a["id"] not in self._artifact_seen]
+        if not fresh:
+            return
+        self._artifact_seen.update(a["id"] for a in fresh)
+        from .attachments import AttachmentGroup
+        group = AttachmentGroup(fresh, self.attachment_paths)
+        self.transcript_layout.addWidget(group)
+        group.show()
+        self._scroll_chat_bottom()
 
     def _choose_attachments(self):
         from ..attachments import FILE_FILTER
@@ -1211,6 +1273,8 @@ class HarnessPage(EnterprisePage):
         if not self._discard_report_changes():
             return
         self.new_task_mode = True
+        self._artifact_seen.clear()
+        self.session_button.hide()
         self.conversation_id = None
         self.conversation_data = None
         self.workflow_card.apply(None)
@@ -1360,6 +1424,8 @@ class HarnessPage(EnterprisePage):
         self.generate_button.setToolTip("停止" if busy else "发送")
         self.generate_button.setIcon(icon("stop", "#FFFFFF", 16) if busy else icon("send", "#FFFFFF", 18))
         if not busy:
+            self.set_codex_ready(False)
+            self._steer_pending = False
             self._update_stages()
 
     def phase(self, index, message):
@@ -1388,11 +1454,14 @@ class HarnessPage(EnterprisePage):
             widget.setEnabled(enabled)
         # "处理中"的按钮此时是"停止"，即使全局禁用也要保持可点，用于中断生成。
         self.generate_button.setEnabled(enabled or self.processing)
+        self.composer.setEnabled(enabled or self.codex_ready)
+        self.session_button.setEnabled(enabled and not self.processing)
         self.editor.setReadOnly(not enabled)
         if self.forms_dialog:
             self.forms_dialog.setEnabled(enabled)
 
     def append_pending(self, request, attachment_paths=()):
+        self._artifact_seen.clear()
         messages = list(self.conversation_data["messages"]) if self.conversation_data else []
         from pathlib import Path
         attachments = [{"name": Path(p).name, "source_path": p, "size": Path(p).stat().st_size, "status": "processing"}
@@ -1542,7 +1611,7 @@ class HarnessPage(EnterprisePage):
             self._scroll_animation = animation
             animation.start()
 
-        QTimer.singleShot(0, start)
+        QTimer.singleShot(0, bar, start)
 
     def _stop_scroll_animation(self):
         if self._scroll_animation is not None:
@@ -1634,11 +1703,12 @@ class HarnessPage(EnterprisePage):
 
     def _schedule_fit(self):
         """布局完成后再量一次：创建时控件宽高还没定下来。"""
-        QTimer.singleShot(0, self._fit_bubbles)
+        QTimer.singleShot(0, self, self._fit_bubbles)
 
     def apply_conversation(self, data):
         self.conversation_data = data
         self.conversation_id = data["id"]
+        self.session_button.setVisible(bool(data.get("codex")))
         self.new_task_mode = False
         self.end_answer()
         self.task_title.setText(data["title"])
@@ -1710,9 +1780,10 @@ class HarnessPage(EnterprisePage):
         toolbar.setVisible(pinned)
         header.addWidget(toolbar)
         block.addLayout(header)
-        if message.get("attachments"):
+        uploaded = [a for a in message.get("attachments", []) if not a.get("generated")]
+        if uploaded:
             from .attachments import AttachmentGroup
-            group = AttachmentGroup(message["attachments"], self.attachment_paths)
+            group = AttachmentGroup(uploaded, self.attachment_paths)
             group.analysis_requested.connect(lambda attachment_id, goal=message["content"]: self.task_requested.emit("继续完成附件任务：" + goal + "\n附件ID：" + attachment_id + "。先继续未完成总览，再按任务查看原图。", False))
             block.addWidget(group)
         if role == "assistant" and (message.get("reasoning") or "").strip():
@@ -1742,6 +1813,10 @@ class HarnessPage(EnterprisePage):
                 choice = ChoiceCard(questions)
                 choice.submitted.connect(lambda text, k=key: self._answer_choice(k, text))
                 block.addWidget(choice)
+        generated = [a for a in message.get("attachments", []) if a.get("generated")]
+        if generated:
+            from .attachments import AttachmentGroup
+            block.addWidget(AttachmentGroup(generated, self.attachment_paths))
         return [container]
 
     def _text_bubble(self, body, role):

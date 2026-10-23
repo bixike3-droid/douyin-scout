@@ -41,3 +41,16 @@ build*.log
 # 站点内的安装包不进仓库（上传时单独放）
 site/download/*.zip
 site/download/*.exe
+
+# Native UI preview renders
+tmp/attachment-ui-preview/
+tmp/real-archive-workspace/
+tmp/codex-probe/
+desktop-html/node_modules/
+desktop-html/dist/
+desktop-html/startup.log
+desktop-html/window-actions.log
+desktop-html/*.sqlite3
+tmp/html-desktop/
+# 本地调试与探针产物整体忽略（上面几个子目录保留为显式说明）
+tmp/

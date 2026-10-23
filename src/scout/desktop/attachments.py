@@ -114,8 +114,10 @@ class AttachmentTile(QPushButton):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setMouseTracking(True)
         self.setAttribute(Qt.WidgetAttribute.WA_Hover)
+        from ..tools.workspace import artifact_path
+        resolve = artifact_path if item.get("generated") else managed_path
         try:
-            self.path = managed_path(paths, item["relative_path"]) if item.get("relative_path") and paths else Path(item["source_path"])
+            self.path = resolve(paths, item["relative_path"]) if item.get("relative_path") and paths else Path(item["source_path"])
         except (KeyError, ValueError):
             self.path = None
         ext = Path(item["name"]).suffix.lower()
@@ -141,11 +143,11 @@ class AttachmentTile(QPushButton):
         self.removable = removable
         if self.path and self.kind == "image":
             preview_path = item.get("thumbnail_relative_path")
-            self.preview = thumbnail(managed_path(paths, preview_path) if preview_path and paths else self.path)
+            self.preview = thumbnail(resolve(paths, preview_path) if preview_path and paths else self.path)
         elif self.path and self.kind == "video":
             preview_path = item.get("preview_relative_path")
             if preview_path and paths:
-                self.preview = thumbnail(managed_path(paths, preview_path))
+                self.preview = thumbnail(resolve(paths, preview_path))
             job = _VideoPreview(self.path)
             self._preview_job = job
             job.signals.ready.connect(self._preview_ready)

@@ -32,6 +32,11 @@ class Conversations:
         data["workflow"] = Workflows(self.db).latest(conversation_id)
         from .chat import ChatRuns
         data["chat_run"] = ChatRuns(self.db).latest(conversation_id)
+        from ..tools.workspace import artifact_metadata
+        generated = self.db.rows_as_dicts("SELECT * FROM workspace_artifacts WHERE conversation_id=? ORDER BY id", (conversation_id,))
+        for message in data["messages"]:
+            message["attachments"].extend(artifact_metadata(a) for a in generated if a["message_id"] == message["id"])
+        data["codex"] = bool(self.db.query_one("SELECT 1 FROM codex_sessions WHERE conversation_id=?", (conversation_id,)))
         return data
 
     def recent(self):

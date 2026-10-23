@@ -37,6 +37,22 @@ export function uploadFile(file, progress) {
   });
 }
 export async function nativeBridge() {
+  // Both desktop carriers use the same UI contract. Qt remains available for
+  // the original desktop; the release carrier uses the system WebView2 runtime.
+  if (new URLSearchParams(location.hash.slice(1)).get('native') === 'webview2' || window.pywebview?.api) {
+    if (!window.pywebview?.api) await new Promise(resolve => window.addEventListener('pywebviewready', resolve, { once: true }));
+    const host = window.pywebview.api;
+    const signal = name => ({ connect(callback) { window.addEventListener(name, event => callback(event.detail)); } });
+    return {
+      handlesNativeDrop: true,
+      filesDropped: signal('yuanjing-files-dropped'),
+      dragState: signal('yuanjing-drag-state'),
+      initialFiles: callback => host.initialFiles(token).then(callback),
+      pickFiles: callback => host.pickFiles(token).then(callback),
+      windowAction: action => host.windowAction(token, action),
+      openDataFolder: () => host.openDataFolder(token),
+    };
+  }
   if (!window.qt?.webChannelTransport) return null;
   await new Promise((resolve, reject) => {
     const script = document.createElement('script');
