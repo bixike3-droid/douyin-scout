@@ -8,6 +8,7 @@ import os
 import subprocess
 from pathlib import Path
 import secrets
+import sys
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -21,11 +22,28 @@ from ..store.conversation import Conversations
 from ..attachments import VIDEOS
 
 
+def _frontend_dist() -> Path:
+    """定位前端产物：源码在仓库根下，PyInstaller onedir 在 _internal/ 下。
+
+    打包版里 __file__ 指向 <stage>/_internal/scout/web_desktop/api.py，
+    parents[3] 会落到 <stage> 而数据放在 <stage>/_internal，所以必须两个都试。
+    """
+    here = Path(__file__).resolve()
+    roots = [Path(getattr(sys, "_MEIPASS", here.parents[2]))]
+    for parent in here.parents[:4]:
+        roots.append(parent)
+    for root in roots:
+        candidate = root / "desktop-html" / "dist"
+        if (candidate / "index.html").is_file():
+            return candidate
+    return here.parents[3] / "desktop-html" / "dist"
+
+
 def create_app(paths, *, gateway=None, dist=None):
     gateway = gateway or Gateway(paths)
     with AppContext.create(load_config(paths)):
         pass
-    dist = Path(dist) if dist else Path(__file__).resolve().parents[3] / "desktop-html" / "dist"
+    dist = Path(dist) if dist else _frontend_dist()
 
     @asynccontextmanager
     async def lifespan(app):

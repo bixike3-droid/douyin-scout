@@ -16,6 +16,7 @@ from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 import zipfile
@@ -23,6 +24,7 @@ import zipfile
 REPO = Path(__file__).resolve().parents[1]
 STAGE = REPO / "dist/windows/源镜"
 VERSION = "0.11.0"
+DEFENDER = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Windows Defender" / "MpCmdRun.exe"
 
 
 def digest(path):
@@ -110,6 +112,57 @@ def dependency_licenses():
     (directory / "dependencies.json").write_text(json.dumps(sorted(inventory, key=lambda r: r["name"]), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def defender_scan(targets):
+    """用系统自带 Defender 扫发布文件，记录真实结果。
+
+    机器上没装 Defender（第三方杀软）时只标 available=false，不让打包失败，
+    也不伪造“已扫描”。-DisableRemediation 避免 QA 期间被自动隔离而看不到原始判定。
+    """
+    result = {"available": DEFENDER.is_file(), "scanner": str(DEFENDER), "scanned": []}
+    if not result["available"]:
+        result["note"] = "未找到 Windows Defender 组件（可能使用第三方杀软）"
+        return result
+    for target in targets:
+        target = target.resolve()
+        started = time.time()
+        proc = subprocess.run([str(DEFENDER), "-Scan", "-ScanType", "3", "-File", str(target), "-DisableRemediation"],
+                              capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=3600)
+        output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        result["scanned"].append({"path": target.name, "exit": proc.returncode, "clean": proc.returncode == 0,
+                                  "seconds": round(time.time() - started, 1), "output": output[-1200:]})
+    result["clean"] = all(item["clean"] for item in result["scanned"])
+    return result
+
+
+def release_verification(scan):
+    """把验收记录、哈希和杀软结果写成包内可核对的一份文件。"""
+    qa = Path(tempfile.gettempdir()) / "yuanjing-release-qa"
+    acceptance = {}
+    for name, label in (("latest-offline.json", "offline"), ("latest-live.json", "live_flash"),
+                        ("latest-archive.json", "archive")):
+        path = qa / name
+        if not path.is_file():
+            continue
+        data = json.loads(path.read_text(encoding="utf-8"))
+        acceptance[label] = {
+            "verified": bool(data.get("verified")),
+            "model": data.get("model"),
+            "ran_at": time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(path.stat().st_mtime)),
+            "checks": [check["name"] for check in data.get("checks", [])],
+        }
+    exe = STAGE / "源镜.exe"
+    payload = {
+        "product": "源镜", "version": VERSION,
+        "built_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "executable": {"bytes": exe.stat().st_size, "sha256": digest(exe)},
+        "acceptance": acceptance,
+        "defender": scan,
+        "notes": "验收在清除 PYTHON/SCOUT/DEEPSEEK/OPENAI/CODEX 环境变量、临时 LOCALAPPDATA 下对已构建产物执行；模型为 deepseek-flash。",
+    }
+    (STAGE / "release-verification.json").write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return payload
+
+
 def build():
     import PyInstaller.__main__
     work = REPO / "build/windows-release"
@@ -165,6 +218,8 @@ def build():
 
 
 def finalize():
+    scan = defender_scan([STAGE / "源镜.exe"])
+    release_verification(scan)
     entries = [{"path": f.relative_to(STAGE).as_posix(), "bytes": f.stat().st_size, "sha256": digest(f)}
                for f in sorted(STAGE.rglob("*")) if f.is_file() and f.name != "files.sha256.json"]
     (STAGE / "files.sha256.json").write_text(json.dumps(entries, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -175,7 +230,11 @@ def finalize():
                 archive.write(file, "源镜/" + file.relative_to(STAGE).as_posix())
     checksum = digest(target)
     target.with_suffix(".zip.sha256.txt").write_text(checksum + "  " + target.name + "\n", encoding="utf-8")
+    zip_scan = defender_scan([target])
+    (target.parent / (target.name + ".defender.json")).write_text(
+        json.dumps(zip_scan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(json.dumps({"package": str(target), "bytes": target.stat().st_size, "sha256": checksum,
+                      "defender_clean": zip_scan.get("clean"),
                       "installed_bytes": sum(e["bytes"] for e in entries)}, ensure_ascii=False), flush=True)
 
 

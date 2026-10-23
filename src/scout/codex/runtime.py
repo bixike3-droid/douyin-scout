@@ -101,8 +101,10 @@ def prepare_runtime(paths, cfg):
         f'base_url = {quote(cfg.base_url.rstrip("/"))}\n'
         'wire_api = "responses"\nenv_key = "DEEPSEEK_API_KEY"\n'
         'requires_openai_auth = false\nsupports_websockets = false\n'
-        f'stream_idle_timeout_ms = {int(cfg.timeout_s) * 1000}\n'
-        'request_max_retries = 0\nstream_max_retries = 0\n'
+        # 流在工具执行期间本来就是静默的：大视频转码、压缩包展开都可能超过 120 秒。
+        # 用 timeout_s 当空闲上限会把正常任务判成断流，这里单独给一个宽松值。
+        f'stream_idle_timeout_ms = {max(int(cfg.timeout_s), 1800) * 1000}\n'
+        'request_max_retries = 0\nstream_max_retries = 2\n'
     )
     (home / "config.toml").write_text(config, encoding="utf-8")
     # Set CODEX_HOME only for the child, never mutate the host's environment.

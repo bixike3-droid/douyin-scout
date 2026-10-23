@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import sys
 import uuid
 from xml.etree import ElementTree as ET
 import zipfile
@@ -104,20 +105,27 @@ def _image(source, output, *, edge=1600, crop=None):
 def ffmpeg_exe() -> str:
     """返回可用的 ffmpeg 路径。
 
-    优先用系统已装的 ffmpeg，其次用可选的 imageio-ffmpeg。
-    发布包里**不再捆绑** imageio 的 ffmpeg.exe（83MB，国内杀软误报重灾区），
-    所以这里必须能优雅地缺失。
+    查找顺序：显式配置 → 系统 PATH → 发布包内置 runtime/ffmpeg → imageio-ffmpeg。
+    发布包把 ffmpeg.exe 放在 exe 同级的 runtime/ffmpeg 下（见 build_windows_release.py），
+    因此不能只认 PATH 和 imageio-ffmpeg，否则打包版会误报"未找到 ffmpeg"。
     """
+    configured = os.environ.get("SCOUT_FFMPEG", "").strip()
+    if configured and Path(configured).is_file():
+        return configured
     found = shutil.which("ffmpeg")
     if found:
         return found
+    if getattr(sys, "frozen", False):
+        bundled = Path(sys.executable).parent / "runtime" / "ffmpeg" / "ffmpeg.exe"
+        if bundled.is_file():
+            return str(bundled)
     try:
         from imageio_ffmpeg import get_ffmpeg_exe
         return get_ffmpeg_exe()
     except Exception:                       # noqa: BLE001
         raise RuntimeError(
-            "未找到 ffmpeg。视频附件解析需要本机安装 ffmpeg（并加入 PATH），"
-            "或执行 pip install imageio-ffmpeg。"
+            "未找到 ffmpeg。视频附件解析需要本机安装 ffmpeg（并加入 PATH）、"
+            "发布包内的 runtime/ffmpeg/ffmpeg.exe，或执行 pip install imageio-ffmpeg。"
         ) from None
 
 
