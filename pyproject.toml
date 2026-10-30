@@ -1,6 +1,6 @@
 [project]
 name = "douyin-scout"
-version = "0.1.0"
+version = "0.11.1"
 description = "抖音互动数据采集与分析框架（本地自用；登录态 / 匿名态分离，稳定优先）"
 requires-python = ">=3.11"
 dependencies = [
@@ -21,9 +21,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-desktop = ["PySide6-Essentials==6.8.3"]
 codex = ["openai-codex==0.163.0"]
-web-desktop = ["PySide6-Essentials==6.8.3", "PySide6-Addons==6.8.3", "fastapi>=0.143,<0.144", "uvicorn[standard]>=0.54,<0.55"]
 windows-desktop = ["pywebview==6.2.1", "pythonnet==3.2.1", "fastapi>=0.143,<0.144", "uvicorn[standard]>=0.54,<0.55", "openai-codex==0.163.0"]
 workspace-python = ["openpyxl==3.1.5", "python-docx==1.2.0", "reportlab==5.1.0", "xlsxwriter==3.3.0"]
 

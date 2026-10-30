@@ -4,11 +4,11 @@ VSVersionInfo(
   kids=[StringFileInfo([StringTable('080404b0', [
     StringStruct('CompanyName', '源镜'),
     StringStruct('FileDescription', '源镜 · 内容工作台'),
-    StringStruct('FileVersion', '0.11.0.0'),
+    StringStruct('FileVersion', '0.11.1.0'),
     StringStruct('InternalName', 'yuanjing'),
     StringStruct('LegalCopyright', 'Copyright (C) 2026 bixike3-droid · GPL-3.0'),
     StringStruct('OriginalFilename', '源镜.exe'),
     StringStruct('ProductName', '源镜'),
-    StringStruct('ProductVersion', '0.11.0.0')
+    StringStruct('ProductVersion', '0.11.1.0')
   ])]), VarFileInfo([VarStruct('Translation', [2052, 1200])])]
 )

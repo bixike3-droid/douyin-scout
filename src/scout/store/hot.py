@@ -79,3 +79,38 @@ class HotTopics:
             "SELECT s.fetched_at, e.rank, e.hot_value FROM hot_entries e "
             "JOIN hot_snapshots s ON s.id = e.snapshot_id "
             "WHERE e.word=? ORDER BY s.id DESC LIMIT ?", (str(word), max(1, limit)))
+
+
+class HotVideoLinks:
+    """热搜词条关联的视频（代表视频 + 相关视频）。"""
+
+    def __init__(self, db: Database):
+        self.db = db
+
+    def replace(self, sentence_id: str, aweme_ids: Iterable[str], *, fetched_at: str | None = None) -> int:
+        sid = str(sentence_id or "").strip()
+        ids = [str(item).strip() for item in aweme_ids if str(item or "").strip()]
+        if not sid or not ids:
+            return 0
+        stamp = fetched_at or iso()
+        with self.db.transaction() as conn:
+            conn.execute("DELETE FROM hot_video_links WHERE sentence_id = ?", (sid,))
+            conn.executemany(
+                "INSERT OR IGNORE INTO hot_video_links (sentence_id, aweme_id, rank, fetched_at) "
+                "VALUES (?,?,?,?)",
+                [(sid, aweme_id, rank, stamp) for rank, aweme_id in enumerate(ids)])
+        return len(ids)
+
+    def listing(self, sentence_id: str, limit: int = 8) -> list[dict[str, Any]]:
+        return self.db.rows_as_dicts(
+            "SELECT w.aweme_id, w.description, w.author_sec_uid, w.cover_url, w.digg_count,"
+            " w.play_count, w.comment_count, w.create_time, w.media_type, l.rank, l.fetched_at"
+            " FROM hot_video_links l JOIN works w ON w.aweme_id = l.aweme_id"
+            " WHERE l.sentence_id = ? ORDER BY l.rank ASC LIMIT ?",
+            (str(sentence_id or "").strip(), max(1, limit)))
+
+    def fetched_at(self, sentence_id: str) -> str:
+        value = self.db.scalar(
+            "SELECT MAX(fetched_at) FROM hot_video_links WHERE sentence_id = ?",
+            (str(sentence_id or "").strip(),), default="")
+        return str(value or "")

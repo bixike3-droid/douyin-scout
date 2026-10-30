@@ -1137,6 +1137,30 @@ def circuit_open(tier: str = typer.Argument("b"), reason: str = typer.Option("�
     console.print(f"[yellow]{tier} 已熔断：{reason}[/]")
 
 
+@app.command()
+def forget(
+    sec_uid: str = typer.Argument(..., help="互动者的 sec_uid（互动受众详情里可复制）"),
+    apply: bool = typer.Option(False, "--apply", help="确认删除；默认只预览将删除的条数"),
+) -> None:
+    """删除某个互动者的全部本地数据（不含归档正文与导出文件）。"""
+    from .store.forget import ForgetPerson
+    with _ctx() as ctx:
+        try:
+            if not apply:
+                data = ForgetPerson(ctx.db).preview(sec_uid)
+                console.print(json.dumps(data, ensure_ascii=False, indent=2))
+                console.print("[yellow]预览模式：确认后加 --apply 执行删除。[/]")
+                return
+            result = ForgetPerson(ctx.db).delete(sec_uid)
+        except ValueError as exc:
+            raise typer.BadParameter(str(exc))
+        except LookupError as exc:
+            console.print(f"[red]{exc}[/]")
+            raise typer.Exit(1)
+    console.print(f"[green]已删除 {result['sec_uid']} 的本地数据[/]")
+    console.print(json.dumps(result["deleted"], ensure_ascii=False, indent=2))
+
+
 @app.command("cleanup")
 def cmd_cleanup(
     dry_run: bool = typer.Option(

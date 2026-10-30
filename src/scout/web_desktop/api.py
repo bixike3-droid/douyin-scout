@@ -11,7 +11,7 @@ import secrets
 import sys
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from .gateway import Gateway
@@ -20,6 +20,7 @@ from ..config import load_config
 from ..db.connect import Database
 from ..store.conversation import Conversations
 from ..attachments import VIDEOS
+from ..work_media import WorkMediaBusy, WorkNotFound, UpstreamUnavailable, chunks
 
 
 def _frontend_dist() -> Path:
@@ -37,6 +38,39 @@ def _frontend_dist() -> Path:
         if (candidate / "index.html").is_file():
             return candidate
     return here.parents[3] / "desktop-html" / "dist"
+
+
+def _dispose(body) -> None:
+    close = getattr(body, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:
+            pass
+
+
+async def _work_image(gateway, aweme_id, index):
+    """封面 / 图文单页：取字节转发，地址失效时刷新一次。"""
+    async def load():
+        url = (gateway.work_media.cover(aweme_id) if index is None
+               else gateway.work_media.image(aweme_id, index))
+        return await asyncio.to_thread(gateway.work_media.fetch_bytes, url)
+
+    try:
+        status, content_type, data = await load()
+        if status not in (200, 206):
+            await gateway.refresh_work(aweme_id, force=True)
+            status, content_type, data = await load()
+    except WorkNotFound as exc:
+        raise HTTPException(404, str(exc))
+    except WorkMediaBusy as exc:
+        raise HTTPException(409, str(exc))
+    except UpstreamUnavailable as exc:
+        raise HTTPException(502, str(exc))
+    if status not in (200, 206) or not data:
+        raise HTTPException(404, "图片不可用")
+    media = (content_type or "image/jpeg").split(";")[0].strip()
+    return Response(data, media_type=media, headers={"Cache-Control": "private, max-age=1800"})
 
 
 def create_app(paths, *, gateway=None, dist=None):
@@ -93,14 +127,6 @@ def create_app(paths, *, gateway=None, dist=None):
     @app.get("/health")
     def health():
         return {"ok": True}
-
-    @app.get("/bridge.js")
-    def bridge():
-        return Response(gateway.bridge_js or "window.yuanjingBridgeUnavailable = true;", media_type="application/javascript")
-
-    @app.get("/brand.png")
-    def brand():
-        return FileResponse(Path(__file__).resolve().parent.parent / "desktop" / "assets" / "brand_app.png")
 
     @app.get("/mermaid.js")
     def mermaid():
@@ -186,12 +212,25 @@ def create_app(paths, *, gateway=None, dist=None):
 
     @app.put("/api/preferences")
     async def preferences(request: Request):
-        return gateway.save_preferences(await request.json())
+        try:
+            return gateway.save_preferences(await request.json())
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.get("/api/hot")
     def hot():
         # 有 AI 评估过的最新看板就用它；否则退回本地快照（不联网）
-        return gateway.last_hot or gateway.service.hot_snapshot()
+        data = gateway.last_hot or gateway.service.hot_snapshot() or {}
+        data = dict(data)
+        # 兼容：极端情况下进程里可能是旧版 Gateway（热重载/半更新），不要让页面 500
+        status = getattr(gateway, "hot_status", None)
+        if callable(status):
+            data.update(status())
+        return data
+
+    @app.post("/api/hot/refresh")
+    async def hot_refresh():
+        return await gateway.refresh_hot()
 
     @app.get("/api/job")
     def job():
@@ -200,7 +239,10 @@ def create_app(paths, *, gateway=None, dist=None):
     @app.post("/api/jobs")
     async def start(request: Request):
         body = await request.json()
-        return await gateway.start(body.get("kind", "chat"), body.get("options", {}))
+        try:
+            return await gateway.start(body.get("kind", "chat"), body.get("options", {}))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
 
     @app.post("/api/jobs/stop")
     async def stop():
@@ -351,6 +393,152 @@ def create_app(paths, *, gateway=None, dist=None):
 
     if (dist / "assets").is_dir():
         app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
+
+    @app.get("/api/update")
+    def update_status(check: bool = False):
+        return gateway.update_status(check=check)
+
+    @app.post("/api/update/download")
+    def update_download():
+        try:
+            return gateway.start_update_download()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.post("/api/update/apply")
+    def update_apply():
+        try:
+            return gateway.apply_update()
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.get("/api/people/{sec_uid}")
+    def person_preview(sec_uid: str):
+        from ..db.connect import Database
+        from ..store.forget import ForgetPerson
+        try:
+            with Database.open(gateway.paths.db_path, read_only=True) as db:
+                return ForgetPerson(db).preview(sec_uid)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+
+    @app.delete("/api/people/{sec_uid}")
+    def forget_person(sec_uid: str):
+        from ..db.connect import Database
+        from ..store.forget import ForgetPerson
+        try:
+            with Database.open(gateway.paths.db_path) as db:
+                return ForgetPerson(db).delete(sec_uid)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except LookupError as exc:
+            raise HTTPException(404, str(exc))
+
+    @app.post("/api/hot/{sentence_id}/videos/{aweme_id}/send")
+    async def hot_video_send(sentence_id: str, aweme_id: str, request: Request):
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        try:
+            return await gateway.send_hot_video(sentence_id, aweme_id, str((body or {}).get("request") or ""))
+        except ValueError as exc:
+            raise HTTPException(400, str(exc))
+        except WorkMediaBusy as exc:
+            raise HTTPException(409, str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(502, str(exc))
+
+    @app.get("/api/hot/{sentence_id}/videos")
+    def hot_videos(sentence_id: str):
+        return gateway.hot_video_items(sentence_id)
+
+    @app.post("/api/hot/{sentence_id}/videos")
+    async def hot_videos_refresh(sentence_id: str):
+        try:
+            return await gateway.hot_videos(sentence_id, refresh=True)
+        except WorkMediaBusy as exc:
+            raise HTTPException(409, str(exc))
+        except RuntimeError as exc:
+            raise HTTPException(502, str(exc))
+
+    @app.get("/api/insights")
+    def insights():
+        return gateway.insights()
+
+    # ── 作品媒体（详情 / 代理流 / 显式保存）──────────────────
+
+    @app.get("/api/works/{aweme_id}")
+    def work_detail(aweme_id: str):
+        try:
+            return gateway.work_detail(aweme_id)
+        except WorkNotFound as exc:
+            raise HTTPException(404, str(exc))
+
+    @app.get("/api/works/{aweme_id}/media")
+    async def work_media(aweme_id: str, request: Request):
+        """代理源站字节，支持 Range；地址过期时刷新一次再重试。"""
+        try:
+            url = await gateway.work_media_url(aweme_id)
+            status, headers, body = await asyncio.to_thread(
+                gateway.work_media.open, url, request.headers.get("range", ""))
+            if status not in (200, 206):
+                _dispose(body)
+                url = await gateway.refresh_work(aweme_id, force=True)
+                status, headers, body = await asyncio.to_thread(
+                    gateway.work_media.open, url, request.headers.get("range", ""))
+            if status not in (200, 206):
+                _dispose(body)
+                raise HTTPException(502, f"源站返回 {status}，无法播放")
+        except WorkNotFound as exc:
+            raise HTTPException(404, str(exc))
+        except WorkMediaBusy as exc:
+            raise HTTPException(409, str(exc))
+        except UpstreamUnavailable as exc:
+            raise HTTPException(502, str(exc))
+        response = StreamingResponse(chunks(body), status_code=status,
+                                     media_type=headers.get("Content-Type") or "video/mp4")
+        for key in ("Content-Length", "Content-Range", "Accept-Ranges"):
+            if headers.get(key):
+                response.headers[key] = headers[key]
+        response.headers.setdefault("Accept-Ranges", "bytes")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.get("/api/works/{aweme_id}/cover")
+    async def work_cover(aweme_id: str):
+        return await _work_image(gateway, aweme_id, None)
+
+    @app.get("/api/works/{aweme_id}/image/{index}")
+    async def work_image(aweme_id: str, index: int):
+        return await _work_image(gateway, aweme_id, index)
+
+    @app.post("/api/works/{aweme_id}/save")
+    async def save_work(aweme_id: str):
+        try:
+            await gateway.work_media_url(aweme_id)
+            return await asyncio.to_thread(gateway.save_work, aweme_id)
+        except WorkNotFound as exc:
+            raise HTTPException(404, str(exc))
+        except WorkMediaBusy as exc:
+            raise HTTPException(409, str(exc))
+        except UpstreamUnavailable as exc:
+            raise HTTPException(502, str(exc))
+
+    @app.delete("/api/works/{aweme_id}/save")
+    def forget_work(aweme_id: str):
+        try:
+            return {"removed": gateway.work_media.forget(aweme_id)}
+        except WorkNotFound as exc:
+            raise HTTPException(404, str(exc))
+
+    @app.get("/api/media")
+    def media_usage():
+        return gateway.work_usage()
+
+    @app.delete("/api/media")
+    def clear_media():
+        return gateway.clear_work_media()
 
     @app.get("/")
     def index():

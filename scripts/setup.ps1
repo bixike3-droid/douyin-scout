@@ -40,7 +40,7 @@ if (-not (Test-Path $py)) {
 
 Write-Host "安装依赖（这一步需要联网）..." -ForegroundColor Cyan
 & $py -m pip install --upgrade pip --quiet
-& $py -m pip install -e ".[dev]"
+& $py -m pip install -e ".[dev,windows-desktop]"
 
 if (-not $SkipBrowser) {
     Write-Host "下载 Chromium（约 150MB，只做一次）..." -ForegroundColor Cyan

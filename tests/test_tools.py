@@ -284,7 +284,7 @@ def test_confirmation_broker_round_trip_across_threads():
     box = {}
 
     def from_ui_thread():
-        # 模拟 Qt 主线程：在另一个线程里把用户选择送回来
+        # 模拟界面线程：在另一个线程里把用户选择送回来
         for _ in range(200):
             if broker.resolve(rid, True):
                 box["ok"] = True

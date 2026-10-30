@@ -1,6 +1,6 @@
 """Build the self-contained WebView2 desktop distribution without Qt or UPX.
 
-Run with the project's venv. Outputs are isolated from the original Qt release.
+Run with the project's venv. Outputs are isolated from previous releases.
 Build dependencies: .[windows-desktop,workspace-python] and PyInstaller.
 """
 from __future__ import annotations
@@ -23,7 +23,20 @@ import zipfile
 
 REPO = Path(__file__).resolve().parents[1]
 STAGE = REPO / "dist/windows/源镜"
-VERSION = "0.11.1"
+VERSION_FILE = REPO / "src/scout/version.py"
+WINDOWS_VERSION_FILE = REPO / "scripts/windows_version.txt"
+
+
+def project_version() -> str:
+    """唯一来源是 src/scout/version.py；打包脚本不另外维护一份。"""
+    import re
+    match = re.search(r'__version__\s*=\s*"([^"]+)"', VERSION_FILE.read_text(encoding="utf-8"))
+    if not match:
+        raise SystemExit("无法从 src/scout/version.py 读取版本号")
+    return match.group(1)
+
+
+VERSION = project_version()
 DEFENDER = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Windows Defender" / "MpCmdRun.exe"
 
 
@@ -171,7 +184,7 @@ def build():
         "--onedir", "--windowed", "--noupx", "--optimize", "0", "--distpath", str(STAGE.parent),
         "--workpath", str(work), "--specpath", str(work), "--paths", str(REPO / "src"),
         "--icon", str(REPO / "src/scout/desktop/assets/yuanjing.ico"),
-        "--version-file", str(REPO / "scripts/windows_version.txt")]
+        "--version-file", str(WINDOWS_VERSION_FILE)]
     for source, dest in (("config/default.yaml", "config"), ("src/scout/desktop/assets", "scout/desktop/assets"),
                          ("src/scout/db/migrations", "scout/db/migrations"), ("src/scout/skills", "scout/skills"),
                          ("desktop-html/dist", "desktop-html/dist")):
@@ -182,7 +195,7 @@ def build():
                    "uvicorn.protocols.websockets.websockets_sansio_impl", "uvicorn.lifespan.on", "webview.platforms.edgechromium"):
         options += ["--hidden-import", module]
     for module in ("PySide6", "PyQt5", "PyQt6", "qtpy", "tkinter", "matplotlib", "numpy", "pandas", "scipy", "IPython", "notebook",
-                   "pytest", "setuptools", "pip", "imageio_ffmpeg", "scout.web_desktop.window"):
+                   "pytest", "setuptools", "pip", "imageio_ffmpeg"):
         options += ["--exclude-module", module]
     PyInstaller.__main__.run(options)
     # .NET 默认拒绝从“网络位置”加载程序集；用户从浏览器下载再解压时，

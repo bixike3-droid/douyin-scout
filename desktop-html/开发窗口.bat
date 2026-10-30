@@ -6,7 +6,7 @@ rem  What it does:
 rem    1) pick two free ports (api / dev)
 rem    2) generate a tiny temp .cmd that exports env vars and runs vite
 rem    3) wait until the dev server answers
-rem    4) open the Qt window pointed at the dev url
+rem    4) open the WebView2 window pointed at the dev url
 rem =====================================================================
 setlocal
 cd /d "%~dp0"
@@ -16,7 +16,7 @@ set "PY=%ROOT%\.venv\Scripts\python.exe"
 set "TMPCMD=%TEMP%\yuanjing-vite-%RANDOM%.cmd"
 
 if not exist "%PY%" (
-  echo [x] .venv not found. Run desktop\启动.bat first.
+  echo [x] .venv not found. Run: pwsh -File scripts\setup.ps1
   pause
   exit /b 1
 )
@@ -65,7 +65,7 @@ exit /b 1
 
 :dev_ok
 echo [4/4] opening desktop window ^(api %APIPORT%^)...
-start "" "%PY%" "%~dp0app.py" --port %APIPORT% --frontend http://127.0.0.1:%DEVPORT%/
+start "" "%PY%" "%~dp0windows.py" --port %APIPORT% --frontend http://127.0.0.1:%DEVPORT%/
 echo.
 echo Done. You can close this window; vite keeps running in background.
 echo Edit files under src\ and the app window refreshes automatically.

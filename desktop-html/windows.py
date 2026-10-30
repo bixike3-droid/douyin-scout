@@ -1,4 +1,4 @@
-"""Windows release entry; the Qt HTML and original Qt entries remain available."""
+"""Windows release entry for the WebView2 carrier (the only desktop shell)."""
 from pathlib import Path
 import os
 import sys

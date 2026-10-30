@@ -7,6 +7,9 @@ import {
   Choices, CopyButton, FileTile, Markdown, Thought, ToolSteps, parseChoices,
 } from '../../ui/media.jsx';
 import { dateLabel } from '../../api.js';
+import lockupLight from '../../brand/lockup-light.png';
+import lockupDark from '../../brand/lockup-dark.png';
+import appIcon from '../../brand/app-icon.png';
 import { Button, Select, cn } from '../../ui/kit.jsx';
 
 const STARTERS = [
@@ -26,11 +29,9 @@ function Welcome({ onPick, onDropHint }) {
   const [draftSeed, setDraftSeed] = useState(null);
   return (
     <div className="mx-auto max-w-[780px] px-6 pb-6 pt-[clamp(32px,8vh,96px)] text-center">
-      <div
-        className="mx-auto mb-[22px] grid h-[62px] w-[62px] place-items-center rounded-[19px] border border-line shadow-[0_6px_22px_rgb(20_30_60/0.07)]"
-        style={{ background: 'linear-gradient(160deg, color-mix(in srgb, var(--accent) 10%, var(--bg)), var(--bg))' }}
-      >
-        <img src="/brand.png" alt="" className="h-10 w-10" />
+      <div className="mx-auto mb-[20px] flex justify-center">
+        <img src={lockupLight} alt="源镜" className="brand-lockup-light h-[96px] w-auto" />
+        <img src={lockupDark} alt="源镜" className="brand-lockup-dark h-[96px] w-auto" />
       </div>
       <span className="mb-3.5 block text-[10.5px] tracking-[2.4px] text-muted">你的内容工作伙伴</span>
       <h1 className="text-[30px] font-[560] leading-[1.45] tracking-[-1px] text-text">今天，想完成什么？</h1>
@@ -81,7 +82,7 @@ function Message({ message, onOpen, onSend }) {
           <span>你</span>
         ) : (
           <>
-            <img src="/brand.png" alt="" className="h-[19px] w-[19px]" />
+            <img src={appIcon} alt="" className="h-[19px] w-[19px] rounded-[6px]" />
             <strong className="font-[550]">{error ? '执行提示' : '源镜'}</strong>
           </>
         )}
@@ -94,7 +95,7 @@ function Message({ message, onOpen, onSend }) {
       </div>
 
       {files.length ? (
-        <div className={cn('mb-3 flex flex-wrap gap-2.5', user && 'justify-end')}>
+        <div data-testid="message-files" className={cn('mb-3 flex flex-wrap gap-2.5', user && 'justify-end')}>
           {files.map((item) => <FileTile key={item.id || item.name} item={item} onOpen={onOpen} />)}
         </div>
       ) : null}
@@ -102,11 +103,11 @@ function Message({ message, onOpen, onSend }) {
       {!user && message.reasoning ? <Thought text={message.reasoning} /> : null}
 
       {user ? (
-        <div className="whitespace-pre-wrap break-words rounded-[12px_12px_4px_12px] border border-[color-mix(in_srgb,var(--accent)_14%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_9%,var(--bg))] px-3.5 py-2.5 text-[13.5px] leading-[1.75] text-text">
+        <div data-testid="user-message" className="whitespace-pre-wrap break-words rounded-[12px_12px_4px_12px] border border-[color-mix(in_srgb,var(--accent)_14%,var(--line))] bg-[color-mix(in_srgb,var(--accent)_9%,var(--bg))] px-3.5 py-2.5 text-[13.5px] leading-[1.75] text-text">
           {message.content}
         </div>
       ) : (
-        <div className={cn('text-[13.5px] leading-[1.8] text-text', error && 'rounded-[10px] border border-[color-mix(in_srgb,var(--danger)_20%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_5%,var(--bg))] px-4 py-3.5')}>
+        <div data-testid="assistant-message" className={cn('text-[13.5px] leading-[1.8] text-text', error && 'rounded-[10px] border border-[color-mix(in_srgb,var(--danger)_20%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_5%,var(--bg))] px-4 py-3.5')}>
           <Markdown text={parsed.text} />
         </div>
       )}
@@ -126,7 +127,7 @@ function StreamingMessage({ job }) {
   return (
     <article className="mb-6">
       <div className="mb-[7px] flex min-h-[24px] items-center gap-2 text-[11.5px] text-secondary">
-        <img src="/brand.png" alt="" className="h-[19px] w-[19px]" />
+        <img src={appIcon} alt="" className="h-[19px] w-[19px] rounded-[6px]" />
         <strong className="font-[550]">源镜</strong>
         <span className="flex items-center gap-1.5 text-[11px] text-muted">
           <i className="h-1 w-1 animate-pulse rounded-full bg-accent" />
@@ -146,7 +147,7 @@ function StreamingMessage({ job }) {
         </div>
       )}
       {Object.values(job.confirmations || {}).map((item) => (
-        <div key={item.request_id} className="my-3.5 rounded-[12px] border border-[color-mix(in_srgb,#c79d56_35%,var(--line))] bg-[color-mix(in_srgb,#e8c78b_7%,var(--bg))] p-4">
+        <div key={item.request_id} data-testid="confirmation" className="my-3.5 rounded-[12px] border border-[color-mix(in_srgb,#c79d56_35%,var(--line))] bg-[color-mix(in_srgb,#e8c78b_7%,var(--bg))] p-4">
           <div className="mb-3 flex items-center gap-2 text-[13px] text-text">
             <CircleAlert size={18} />
             <strong>允许执行「{item.name}」？</strong>
@@ -211,13 +212,13 @@ function Composer({
     <div className="mx-auto w-full max-w-[780px] shrink-0 px-7 pb-3 pt-1">
       <div
         className={cn(
-          'overflow-hidden rounded-[18px] border bg-bg shadow-[0_6px_24px_rgb(20_30_60/0.07)] transition-[border-color,box-shadow] duration-150',
+          'overflow-hidden rounded-[18px] border bg-[var(--field)] shadow-[0_6px_24px_rgb(20_30_60/0.07)] transition-[border-color,box-shadow] duration-150',
           'border-[color-mix(in_srgb,var(--muted)_28%,var(--line))] focus-within:border-[color-mix(in_srgb,var(--accent)_45%,var(--line))]',
           'focus-within:shadow-[0_6px_26px_rgb(20_30_60/0.1),0_0_0_3px_color-mix(in_srgb,var(--accent)_22%,transparent)]',
         )}
       >
         {uploads.length ? (
-          <div className="flex gap-2.5 overflow-x-auto px-3.5 pt-3.5">
+          <div data-testid="composer-attachments" className="flex gap-2.5 overflow-x-auto px-3.5 pt-3.5">
             {uploads.map((item) => (
               <FileTile
                 compact
@@ -285,11 +286,11 @@ function Composer({
             <button
               type="button"
               aria-label={active ? '停止生成' : '发送消息'}
-              disabled={sending || !canSend}
+              disabled={sending || (!active && !canSend)}
               onClick={active ? onStop : onSend}
               className={cn(
                 'grid h-8 w-8 place-items-center rounded-full transition-[transform,filter,opacity] duration-150',
-                active ? 'bg-text text-bg' : 'bg-accent text-white',
+                active ? 'bg-text text-bg' : 'bg-accent text-[color:var(--accent-contrast)]',
                 'hover:-translate-y-px hover:brightness-105 disabled:pointer-events-none disabled:opacity-30',
               )}
             >
@@ -387,7 +388,7 @@ export default function Workspace({
   const showResume = !active && run && !['complete', 'partial'].includes(run.status);
 
   return (
-    <main className="col-start-2 row-start-2 flex min-h-0 min-w-0 flex-col bg-bg">
+    <main className="col-start-2 row-start-2 flex min-h-0 min-w-0 flex-col bg-[var(--canvas)]">
       <header className="flex h-[48px] shrink-0 items-center justify-between gap-4 border-b border-line bg-[color-mix(in_srgb,var(--bg)_92%,var(--sidebar))] px-4">
         <div className="flex min-w-0 items-center gap-2 text-[11.5px]">
           <span className="whitespace-nowrap text-muted">工作台</span>

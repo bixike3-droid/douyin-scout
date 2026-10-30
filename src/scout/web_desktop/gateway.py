@@ -15,6 +15,8 @@ from ..app import AppContext
 from ..config import load_config
 from ..desktop.service import DesktopService
 from ..desktop.actions import execute
+from ..desktop.update import (current_version, download as download_update, fetch_latest,
+                              install_dir, is_newer, launch_updater)
 from ..codex.control import RunControl
 from ..tools.confirm import ConfirmationBroker
 from ..store.conversation import Conversations
@@ -22,6 +24,7 @@ from ..store.attachments import Attachments
 from ..store.attachment_workspace import AssetStore
 from ..attachments import IMAGES, VIDEOS, managed_path
 from ..attachment_archives import ARCHIVES
+from ..work_media import UpstreamUnavailable, WorkMediaBusy, WorkMediaError, url_expired
 
 
 def file_kind(name):
@@ -70,12 +73,22 @@ class Gateway:
         self.subscribers = set()
         self.uploads = {}
         self.last_hot = None
+        self.hot_task = None
+        self.hot_error = ""
         self.lock = threading.Lock()
         self.sequence = 0
         self.native = False
-        self.bridge_js = ""
         self.upload_root = paths.state_dir / "html-uploads"
         self.upload_root.mkdir(parents=True, exist_ok=True)
+        from ..work_media import WorkMedia
+        self.work_media = WorkMedia(paths)
+        self._work_locks: dict[str, asyncio.Lock] = {}
+        self._hot_locks: dict[str, asyncio.Lock] = {}
+        self.update_info = None
+        self.update_checked_at = 0.0
+        self.update_download = {"state": "idle", "received": 0, "total": 0, "version": "",
+                                "error": "", "archive": "", "verified": False}
+        self._update_lock = threading.Lock()
 
     def register(self, paths, *, temporary=False):
         results = []
@@ -130,6 +143,13 @@ class Gateway:
             if value is not None and (isinstance(value, bool) or not isinstance(value, int)):
                 raise ValueError("会话编号错误")
             old["last_conversation"] = value
+        if "update_auto" in values:
+            old["update_auto"] = bool(values["update_auto"])
+        if "update_skipped" in values:
+            value = values["update_skipped"]
+            if value is not None and not isinstance(value, str):
+                raise ValueError("跳过版本号错误")
+            old["update_skipped"] = str(value or "").lstrip("vV")
         file = self.paths.state_dir / "html-preferences.json"
         temporary = file.with_suffix(".tmp")
         temporary.write_text(json.dumps(old), encoding="utf-8")
@@ -146,6 +166,257 @@ class Gateway:
         return {"overview": overview, "settings": overview["settings"], "conversations": self.recent(),
                 "profile": self.service.enterprise_workspace()["profile"], "preferences": self.preferences(),
                 "job": self.job.public() if self.job else None, "native": self.native}
+
+    # ── 作品媒体 ────────────────────────────────────────────
+
+    def work_detail(self, aweme_id):
+        return self.work_media.detail(aweme_id)
+
+    # ── 应用内更新 ──────────────────────────────────────────
+
+    def update_status(self, *, check=False, timeout=6.0):
+        if check:
+            info = fetch_latest(timeout=timeout)
+            with self._update_lock:
+                self.update_info = info
+                self.update_checked_at = time.time()
+        prefs = self.preferences()
+        with self._update_lock:
+            info = self.update_info
+            progress = dict(self.update_download)
+            checked_at = self.update_checked_at
+        version = str((info or {}).get("version") or "")
+        return {
+            "current": current_version(),
+            "installed": install_dir() is not None,
+            "auto_check": prefs.get("update_auto") is not False,
+            "skipped": str(prefs.get("update_skipped") or ""),
+            "checked_at": checked_at,
+            "latest": info,
+            "newer": bool(info and is_newer(version)),
+            "download": progress,
+        }
+
+    def start_update_download(self):
+        status = self.update_status()
+        if not status["latest"]:
+            status = self.update_status(check=True)
+        info = status["latest"]
+        if not info:
+            raise ValueError("无法获取版本信息，请检查网络后重试")
+        if not status["newer"]:
+            raise ValueError("已是最新版本")
+        if not info.get("zip_url"):
+            raise ValueError("更新源没有提供下载地址")
+        version = str(info.get("version") or "")
+        with self._update_lock:
+            if self.update_download["state"] == "downloading":
+                return dict(self.update_download)
+            if self.update_download["state"] == "ready" and self.update_download["version"] == version:
+                return dict(self.update_download)
+            self.update_download = {"state": "downloading", "received": 0,
+                                    "total": int(info.get("zip_size") or 0),
+                                    "version": version, "error": "", "archive": "",
+                                    "verified": False}
+        target = self.paths.root / "updates" / f"yuanjing-{version}.zip"
+
+        def report(received, total):
+            with self._update_lock:
+                self.update_download["received"] = received
+                if total:
+                    self.update_download["total"] = total
+
+        expected = str(info.get("sha256") or "").lower()
+
+        def run():
+            ok = download_update(str(info.get("zip_url") or ""), target, timeout=120,
+                                 sha256=expected, progress=report)
+            with self._update_lock:
+                if ok:
+                    self.update_download.update(state="ready", archive=str(target),
+                                                received=target.stat().st_size,
+                                                verified=bool(expected))
+                else:
+                    self.update_download.update(
+                        state="failed", error="下载失败或校验不通过，请稍后重试，或到发布页手动下载")
+
+        threading.Thread(target=run, daemon=True).start()
+        return self.update_status()
+
+    def apply_update(self):
+        with self._update_lock:
+            state = dict(self.update_download)
+        if state.get("state") != "ready":
+            raise ValueError("更新包尚未就绪")
+        if not state.get("verified"):
+            raise ValueError("更新源没有提供 sha256，无法自动安装，请到发布页手动下载")
+        folder = install_dir()
+        if folder is None:
+            raise ValueError("源码运行模式不支持自动替换，请到发布页下载新版本")
+        archive = Path(str(state.get("archive") or ""))
+        if not archive.is_file():
+            raise ValueError("更新包已丢失，请重新下载")
+        if not launch_updater(archive, folder):
+            raise ValueError("无法启动更新脚本，请到发布页手动下载")
+        with self._update_lock:
+            self.update_download["state"] = "applying"
+        return {"started": True}
+
+    # ── 热点视频 ────────────────────────────────────────────
+
+    def hot_video_items(self, sentence_id):
+        from ..db.connect import Database
+        from ..store.hot import HotVideoLinks
+        with Database.open(self.paths.db_path, read_only=True) as db:
+            store = HotVideoLinks(db)
+            return {"items": store.listing(sentence_id), "fetched_at": store.fetched_at(sentence_id)}
+
+    def _hot_lock(self, sentence_id):
+        lock = self._hot_locks.get(sentence_id)
+        if lock is None:
+            lock = self._hot_locks[sentence_id] = asyncio.Lock()
+        return lock
+
+    async def hot_videos(self, sentence_id, *, refresh=False):
+        if not refresh:
+            cached = await asyncio.to_thread(self.hot_video_items, sentence_id)
+            if cached["items"]:
+                return cached
+        async with self._hot_lock(str(sentence_id)):
+            if not refresh:
+                cached = await asyncio.to_thread(self.hot_video_items, sentence_id)
+                if cached["items"]:
+                    return cached
+            from ..collect.hot_video import fetch_hot_videos
+            from ..session.lock import ProfileLockBusy
+            ctx = AppContext.create(load_config(self.paths))
+            try:
+                try:
+                    await fetch_hot_videos(ctx, sentence_id)
+                except ProfileLockBusy as exc:
+                    raise WorkMediaBusy("采集正在使用浏览器，请稍后再试") from exc
+                except (ValueError, WorkMediaBusy):
+                    raise
+                except Exception as exc:
+                    raise RuntimeError(f"获取热点视频失败：{exc}") from exc
+            finally:
+                if ctx.session is not None:
+                    try:
+                        await ctx.session.stop()
+                    except Exception:
+                        pass
+                ctx.close()
+        return await asyncio.to_thread(self.hot_video_items, sentence_id)
+
+    async def send_hot_video(self, sentence_id, aweme_id, request=""):
+        """把热点视频下载成附件，直接开一个工作台对话交给团队。"""
+        from ..db.connect import Database
+        from ..work_media import download
+        url = await self.work_media_url(aweme_id)
+        dest = self.paths.state_dir / "hot-videos" / f"{aweme_id}.mp4"
+        await asyncio.to_thread(download, url, dest)
+        uploads = self.register([dest])
+        row = await asyncio.to_thread(self.work_media.row, aweme_id)
+        with Database.open(self.paths.db_path, read_only=True) as db:
+            topic = db.query_one(
+                "SELECT word FROM hot_entries WHERE sentence_id = ? ORDER BY rowid DESC LIMIT 1",
+                (str(sentence_id),))
+            word = (topic["word"] if topic else "") or ""
+        title = (row.get("description") or "未命名视频")[:80]
+        prompt = str(request or "").strip() or (
+            f"这是抖音热点「{word or '实时热点'}」下的视频《{title}》"
+            f"（点赞 {row.get('digg_count') or 0}、评论 {row.get('comment_count') or 0}）。"
+            "请先看视频画面，再回答三点：1) 画面和内容在讲什么；2) 它为什么可能上榜；"
+            "3) 我们能怎么借势，给一个可以直接执行的选题。看不清的地方直接说看不清。"
+        )
+        await self.start("chat", {"request": prompt, "upload_ids": [item["id"] for item in uploads]})
+        return {"conversation_id": self.job.conversation_id, "job": self.job.public()}
+
+    def hot_refreshing(self):
+        return bool(self.hot_task and not self.hot_task.done())
+
+    def hot_status(self):
+        return {"refreshing": self.hot_refreshing(), "error": self.hot_error}
+
+    async def refresh_hot(self):
+        """后台刷新热榜，不占用唯一的对话任务槽。"""
+        if self.hot_refreshing():
+            return self.hot_status()
+        self.hot_error = ""
+
+        async def run():
+            try:
+                result = await asyncio.to_thread(self.service.hot_board)
+                self.last_hot = result
+            except Exception as exc:      # noqa: BLE001
+                self.hot_error = str(exc)[:200]
+            finally:
+                self.hot_task = None
+
+        self.hot_task = asyncio.create_task(run())
+        return self.hot_status()
+
+    def insights(self):
+        from ..db.connect import Database
+        from ..store.insights import Insights
+        with Database.open(self.paths.db_path, read_only=True) as db:
+            return Insights(db, tz=load_config(self.paths).app.timezone).build()
+
+    def _work_lock(self, aweme_id):
+        lock = self._work_locks.get(aweme_id)
+        if lock is None:
+            lock = self._work_locks[aweme_id] = asyncio.Lock()
+        return lock
+
+    async def work_media_url(self, aweme_id):
+        """返回当前可用的播放地址；过期就刷新。"""
+        try:
+            return await asyncio.to_thread(self.work_media.play_url, aweme_id)
+        except WorkMediaError:
+            return await self.refresh_work(aweme_id)
+
+    async def refresh_work(self, aweme_id, *, force=False):
+        from ..collect.work_detail import fetch_work
+        from ..session.lock import ProfileLockBusy
+
+        async with self._work_lock(aweme_id):
+            row = await asyncio.to_thread(self.work_media.row, aweme_id)
+            if not force and not url_expired(row):
+                return str(row["play_url"])
+            ctx = AppContext.create(load_config(self.paths))
+            try:
+                try:
+                    work = await fetch_work(ctx, aweme_id)
+                except ProfileLockBusy as exc:
+                    raise WorkMediaBusy("采集正在使用浏览器，请稍后再试") from exc
+                except WorkMediaError:
+                    raise
+                except Exception as exc:  # playwright 未安装、页面打不开等
+                    raise UpstreamUnavailable(str(exc) or "刷新播放地址失败") from exc
+            finally:
+                if ctx.session is not None:
+                    try:
+                        await ctx.session.stop()
+                    except Exception:
+                        pass
+                ctx.close()
+            url = str(work.get("play_url") or "")
+            if not url:
+                raise UpstreamUnavailable("刷新后仍没有播放地址")
+            return url
+
+    def save_work(self, aweme_id):
+        try:
+            url = self.work_media.play_url(aweme_id)
+        except WorkMediaError as exc:
+            raise exc
+        return self.work_media.save(aweme_id, url)
+
+    def work_usage(self):
+        return self.work_media.usage()
+
+    def clear_work_media(self):
+        return self.work_media.clear()
 
     def publish(self, event):
         job = self.job

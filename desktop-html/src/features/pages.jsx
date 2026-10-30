@@ -1,10 +1,13 @@
 import React, { useEffect, useState } from 'react';
+import { AnimatePresence } from 'motion/react';
 import {
   ArrowUpRight, BarChart3, ChevronLeft, ChevronRight, CircleAlert, Database, Download, FileText,
   Flame, FolderOpen, Loader2, Plus, RefreshCw, Search, Users, X,
 } from 'lucide-react';
-import { api, dateLabel } from '../api.js';
+import { api, dateLabel, withToken } from '../api.js';
 import { FileTile, Markdown, Modal } from '../ui/media.jsx';
+import { WorkDrawer } from './works/WorkDrawer.jsx';
+import { DataInsights } from './insights/DataInsights.jsx';
 import { Badge, Button, Card, EmptyState, Field, Input, Textarea, cn } from '../ui/kit.jsx';
 
 const EMPTY = '—';
@@ -185,6 +188,21 @@ const SEGMENTS = [
 const FIELD_LABEL = {
   sec_uid: '账号编号', aweme_id: '作品编号', metric_note: '指标来源', signature: '简介',
   error: '异常信息', last_error: '异常信息', content_notes: '内容备注',
+  is_verified: '认证状态', profile_state: '采集状态', profile_attempts: '采集尝试',
+  first_seen_at: '首次发现', last_seen_at: '最近发现',
+  priority_reason: '优先原因', quality_reason: '质量说明',
+};
+
+const PROFILE_STATE = {
+  pending: '待采集', ok: '资料已取', no_profile: '无主页',
+  login_wall: '需要登录', blocked: '受限', error: '采集失败',
+};
+
+const displayField = (key, value) => {
+  if (key === 'is_verified') return Number(value) ? '已认证' : '未认证';
+  if (key === 'profile_state') return PROFILE_STATE[value] || String(value);
+  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value)) return dateLabel(value);
+  return String(value);
 };
 
 export function DataPage({ view, startJob, busy, notify }) {
@@ -196,12 +214,19 @@ export function DataPage({ view, startJob, busy, notify }) {
   const [detail, setDetail] = useState(null);
   const [metrics, setMetrics] = useState(null);
   const [selected, setSelected] = useState([]);
+  const [insights, setInsights] = useState(null);
 
   async function load() {
     try { setData(await api(`/page/${view}?${new URLSearchParams({ search: query, page, segment })}`)); } catch (error) { notify(error.message); }
   }
   useEffect(() => { setPage(0); setSelected([]); setDetail(null); }, [view]);
   useEffect(() => { const timer = setTimeout(load, 180); return () => clearTimeout(timer); }, [view, query, page, segment, busy]);
+  useEffect(() => {
+    if (view === 'tasks') { setInsights(null); return undefined; }
+    let live = true;
+    api('/insights').then((value) => { if (live) setInsights(value); }).catch(() => { if (live) setInsights(null); });
+    return () => { live = false; };
+  }, [view, busy, data?.total]);
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
@@ -216,6 +241,8 @@ export function DataPage({ view, startJob, busy, notify }) {
             </Button>
           ) : null}
         </PageHeader>
+
+        {view !== 'tasks' && insights ? <DataInsights view={view} data={insights} /> : null}
 
         {view === 'users' ? (
           <div className="mb-4 flex gap-1 border-b border-line">
@@ -256,7 +283,7 @@ export function DataPage({ view, startJob, busy, notify }) {
           />
         ) : (
           <div className="overflow-auto rounded-[12px] border border-line bg-bg">
-            <table className="w-full border-collapse text-left text-[12px]">
+            <table data-testid="records-table" className="w-full border-collapse text-left text-[12px]">
               <thead>
                 <tr>
                   {view === 'users' ? <th className="w-9" /> : null}
@@ -270,7 +297,11 @@ export function DataPage({ view, startJob, busy, notify }) {
               </thead>
               <tbody>
                 {data.rows.map((row, index) => (
-                  <tr key={row.aweme_id || row.sec_uid || row.id || index} className="transition-colors hover:bg-subtle/60">
+                  <tr
+                    key={row.aweme_id || row.sec_uid || row.id || index}
+                    onClick={view === 'works' ? () => setDetail(row) : undefined}
+                    className={cn('transition-colors hover:bg-subtle/60', view === 'works' && 'cursor-pointer')}
+                  >
                     {view === 'users' ? (
                       <td className="pl-3.5">
                         <input
@@ -317,29 +348,48 @@ export function DataPage({ view, startJob, busy, notify }) {
           />
         ) : null}
 
-        {detail ? (
+        <AnimatePresence>
+          {detail && view === 'works' ? (
+            <WorkDrawer
+              key={detail.aweme_id}
+              row={detail}
+              busy={busy}
+              notify={notify}
+              onClose={() => setDetail(null)}
+              onEditMetrics={() => { setMetrics(detail); setDetail(null); }}
+              onCollectComments={() => startJob('comments', { aweme_id: detail.aweme_id })}
+            />
+          ) : null}
+        </AnimatePresence>
+
+        <AnimatePresence>
+        {detail && view !== 'works' ? (
           <Modal title={detail.description || detail.nickname || '记录详情'} onClose={() => setDetail(null)}>
             <div className="max-h-[70vh] overflow-auto px-6 py-5">
-              {view === 'works' ? (
-                <div className="mb-5 flex gap-2.5">
-                  <Button variant="secondary" size="sm" onClick={() => { setMetrics(detail); setDetail(null); }}>补录后台指标</Button>
-                  <Button variant="secondary" size="sm" disabled={busy} onClick={() => startJob('comments', { aweme_id: detail.aweme_id })}>同步评论</Button>
-                </div>
-              ) : null}
               <dl className="grid grid-cols-[110px_1fr] gap-x-4 gap-y-3 text-[12px]">
                 {Object.entries(detail)
                   .filter(([, value]) => value !== null && value !== '' && typeof value !== 'object')
                   .map(([key, value]) => (
                     <React.Fragment key={key}>
                       <dt className="text-muted">{Object.fromEntries(info.columns.map(([label, k]) => [k, label]))[key] || FIELD_LABEL[key] || key}</dt>
-                      <dd className="break-words text-text">{String(value)}</dd>
+                      <dd className="break-words text-text">{displayField(key, value)}</dd>
                     </React.Fragment>
                   ))}
               </dl>
+              {view === 'users' && detail.sec_uid ? (
+                <ForgetPersonPanel
+                  sec_uid={detail.sec_uid}
+                  name={detail.nickname}
+                  notify={notify}
+                  onDeleted={() => { setDetail(null); setSelected([]); load(); }}
+                />
+              ) : null}
             </div>
           </Modal>
         ) : null}
+        </AnimatePresence>
 
+        <AnimatePresence>
         {metrics ? (
           <MetricsDialog
             row={metrics}
@@ -348,7 +398,85 @@ export function DataPage({ view, startJob, busy, notify }) {
             notify={notify}
           />
         ) : null}
+        </AnimatePresence>
       </div>
+    </div>
+  );
+}
+
+
+/* ------------------------------------------------------ 按人删除 */
+
+function ForgetPersonPanel({ sec_uid, name, notify, onDeleted }) {
+  const [stage, setStage] = useState('idle');
+  const [preview, setPreview] = useState(null);
+  const [error, setError] = useState('');
+
+  async function open() {
+    setStage('loading');
+    setError('');
+    try {
+      setPreview(await api(`/people/${encodeURIComponent(sec_uid)}`));
+      setStage('confirm');
+    } catch (problem) {
+      setError(problem.message);
+      setStage('idle');
+    }
+  }
+
+  async function confirm() {
+    setStage('working');
+    try {
+      const result = await api(`/people/${encodeURIComponent(sec_uid)}`, { method: 'DELETE' });
+      notify(`已删除 ${name || '该互动者'} 的本地数据 · ${result.deleted.total} 条`);
+      onDeleted();
+    } catch (problem) {
+      setError(problem.message);
+      setStage('confirm');
+    }
+  }
+
+  return (
+    <div className="mt-6 border-t border-line pt-4">
+      {stage === 'idle' ? (
+        <div className="flex items-center justify-between gap-4">
+          <p className="text-[11px] leading-relaxed text-muted">
+            需要清除这位互动者的本地数据时，可以先看将删除多少条。
+          </p>
+          <Button variant="ghost" size="sm" className="shrink-0 text-danger hover:bg-danger/10" onClick={open}>
+            删除此人数据
+          </Button>
+        </div>
+      ) : null}
+
+      {error ? <p className="mb-2 text-[11px] text-danger">{error}</p> : null}
+
+      {stage === 'loading' ? (
+        <p className="text-[11px] text-muted">正在统计…</p>
+      ) : null}
+
+      {['confirm', 'working'].includes(stage) && preview ? (
+        <div className="rounded-[10px] border border-[color-mix(in_srgb,var(--danger)_24%,var(--line))] bg-[color-mix(in_srgb,var(--danger)_5%,var(--bg))] px-3.5 py-3">
+          <p className="text-[12px] text-text">
+            将从本机删除 {name || '该互动者'} 的资料、点赞与评论记录、作品样本和分析结果。
+          </p>
+          <p className="mt-1.5 text-[11px] leading-relaxed text-secondary">
+            共 {preview.total} 条：点赞 {preview.like_edges} · 评论 {preview.comments}
+            {' · '}作品 {preview.works} · 分析 {preview.analyses} · 快照 {preview.snapshots}
+          </p>
+          <p className="mt-1.5 text-[10.5px] leading-relaxed text-muted">
+            归档正文（raw/）与已导出的 CSV 不受影响，需要按时间段另行清理。删除不可恢复。
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button variant="danger" size="sm" disabled={stage === 'working'} onClick={confirm}>
+              {stage === 'working' ? '正在删除…' : '确认删除'}
+            </Button>
+            <Button variant="secondary" size="sm" disabled={stage === 'working'} onClick={() => setStage('idle')}>
+              取消
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -583,6 +711,7 @@ export function Reports({ notify, startJob, busy }) {
           </div>
         )}
 
+        <AnimatePresence>
         {report ? (
           <Modal
             title={report.title || '传播方案'}
@@ -615,6 +744,7 @@ export function Reports({ notify, startJob, busy }) {
             </footer>
           </Modal>
         ) : null}
+        </AnimatePresence>
       </div>
     </div>
   );
@@ -629,9 +759,39 @@ const MARK_TONE = {
   无关: 'bg-subtle text-muted',
 };
 
-export function Hot({ job, busy, startJob, onAsk, notify }) {
+export function Hot({ job, busy, startJob, onAsk, notify, onOpenConversation }) {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [videos, setVideos] = useState({});
+  const [selectedVideo, setSelectedVideo] = useState(null);
+  const [sending, setSending] = useState('');
+
+  async function loadVideos(sid) {
+    setVideos((all) => ({ ...all, [sid]: { ...(all[sid] || {}), loading: true, error: '' } }));
+    try {
+      const result = await api(`/hot/${encodeURIComponent(sid)}/videos`, { method: 'POST' });
+      setVideos((all) => ({ ...all, [sid]: { items: result.items || [], fetched_at: result.fetched_at || '' } }));
+    } catch (error) {
+      setVideos((all) => ({ ...all, [sid]: { ...(all[sid] || {}), loading: false, error: error.message } }));
+    }
+  }
+
+  async function sendToTeam(sid, awemeId) {
+    setSending(awemeId);
+    try {
+      const result = await api(`/hot/${encodeURIComponent(sid)}/videos/${encodeURIComponent(awemeId)}/send`, {
+        method: 'POST', body: {},
+      });
+      setSelectedVideo(null);
+      notify('已交给团队，正在打开工作台');
+      onOpenConversation(result.conversation_id);
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setSending('');
+    }
+  }
 
   function load() {
     api('/hot')
@@ -640,18 +800,35 @@ export function Hot({ job, busy, startJob, onAsk, notify }) {
       .finally(() => setLoading(false));
   }
 
+  async function refreshHot() {
+    if (refreshing) return;
+    setRefreshing(true);
+    try {
+      await api('/hot/refresh', { method: 'POST' });
+      for (let index = 0; index < 120; index += 1) {
+        await new Promise((resolve) => window.setTimeout(resolve, 700));
+        const latest = await api('/hot');
+        setData(latest);
+        if (!latest.refreshing) break;
+      }
+    } catch (error) {
+      notify(error.message);
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   // 抓取任务结束后重新读一次（网关会把带 AI 评估的结果留在内存里）
   useEffect(() => { load(); }, [job?.state]);
 
   const topics = data?.topics || [];
-  const refreshing = job?.kind === 'hot' && job?.state === 'running';
   const stamp = data?.fetched_at ? data.fetched_at.replace('T', ' ').slice(0, 16) : '';
 
   return (
     <div className="min-h-0 flex-1 overflow-auto">
       <div className="mx-auto w-full max-w-[1180px] px-8 py-7">
         <PageHeader title="实时热点" subtitle="抖音实时热榜，并按企业资料标出哪些能直接做内容。">
-          <Button variant="secondary" size="sm" disabled={refreshing || busy} onClick={() => startJob('hot')}>
+          <Button variant="secondary" size="sm" disabled={refreshing || busy} onClick={refreshHot}>
             {refreshing ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
             {refreshing ? '正在获取…' : '刷新热点'}
           </Button>
@@ -671,35 +848,96 @@ export function Hot({ job, busy, startJob, onAsk, notify }) {
             icon={Flame}
             title="还没有热点数据"
             desc="点「刷新热点」会打开抖音热榜抓一次，并按企业资料给每条打可用性标记。"
-            action={<Button size="sm" disabled={busy} onClick={() => startJob('hot')}>刷新热点</Button>}
+            action={<Button size="sm" disabled={busy || refreshing} onClick={refreshHot}>刷新热点</Button>}
           />
         ) : (
           <ol className="m-0 list-none overflow-hidden rounded-[12px] border border-line bg-bg p-0">
-            {topics.map((topic, index) => (
-              <li
-                key={`${topic.word}-${index}`}
-                className="flex items-center gap-4 border-b border-line px-4 py-3 last:border-b-0 transition-colors hover:bg-subtle/60"
-              >
-                <span className={cn('w-5 shrink-0 text-center font-mono text-[11px]', index < 3 ? 'text-accent' : 'text-muted')}>
-                  {index + 1}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => onAsk(`借势分析抖音热点：「${topic.word}」${topic.heat ? `（当前热度 ${topic.heat}）` : ''}，结合我的账号定位给一个能直接执行的选题。`)}
-                  className="min-w-0 flex-1 text-left"
-                >
-                  <strong className="block truncate text-[12.5px] font-medium text-text">{topic.word}</strong>
-                  {topic.why ? <small className="mt-1 block truncate text-[11px] text-muted">{topic.why}</small> : null}
-                </button>
-                {topic.mark ? (
-                  <span className={cn('shrink-0 rounded-full px-2 py-[3px] text-[10.5px]', MARK_TONE[topic.mark] || MARK_TONE['参考'])}>
-                    {topic.mark}
-                  </span>
-                ) : null}
-                <span className="w-[72px] shrink-0 text-right text-[11px] text-muted">{topic.heat ? number(topic.heat) : EMPTY}</span>
-                <ArrowUpRight size={13} className="shrink-0 text-muted" />
-              </li>
-            ))}
+            {topics.map((topic, index) => {
+              const sid = topic.sentence_id;
+              const feed = sid ? videos[sid] : null;
+              return (
+                <li key={`${topic.word}-${index}`} className="border-b border-line last:border-b-0">
+                  <div className="flex items-center gap-4 px-4 py-3 transition-colors hover:bg-subtle/60">
+                    <span className={cn('w-5 shrink-0 text-center font-mono text-[11px]', index < 3 ? 'text-accent' : 'text-muted')}>
+                      {index + 1}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onAsk(`借势分析抖音热点：「${topic.word}」${topic.heat ? `（当前热度 ${topic.heat}）` : ''}，结合我的账号定位给一个能直接执行的选题。`)}
+                      className="min-w-0 flex-1 text-left"
+                    >
+                      <strong className="block truncate text-[12.5px] font-medium text-text">{topic.word}</strong>
+                      {topic.why ? <small className="mt-1 block truncate text-[11px] text-muted">{topic.why}</small> : null}
+                    </button>
+                    {topic.mark ? (
+                      <span className={cn('shrink-0 rounded-full px-2 py-[3px] text-[10.5px]', MARK_TONE[topic.mark] || MARK_TONE['参考'])}>
+                        {topic.mark}
+                      </span>
+                    ) : null}
+                    {sid ? (
+                      <button
+                        type="button"
+                        disabled={feed?.loading}
+                        onClick={() => loadVideos(sid)}
+                        className="shrink-0 rounded-md px-1.5 py-1 text-[10.5px] text-secondary transition-colors hover:bg-hover hover:text-text disabled:opacity-50"
+                      >
+                        {feed?.loading ? '读取中…' : '看视频'}
+                      </button>
+                    ) : null}
+                    <span className="w-[72px] shrink-0 text-right text-[11px] text-muted">{topic.heat ? number(topic.heat) : EMPTY}</span>
+                    <ArrowUpRight size={13} className="shrink-0 text-muted" />
+                  </div>
+
+                  {feed ? (
+                    <div className="border-t border-line bg-subtle/30 px-4 py-3">
+                      {feed.loading ? (
+                        <p className="flex items-center gap-2 text-[11px] text-muted">
+                          <Loader2 size={13} className="spin" /> 正在打开热点页取视频…
+                        </p>
+                      ) : feed.error ? (
+                        <p className="text-[11px] text-danger">{feed.error}（可先登录抖音后重试）</p>
+                      ) : (
+                        <>
+                          <div className="flex gap-3 overflow-x-auto pb-1">
+                            {feed.items.map((item) => (
+                              <button
+                                key={item.aweme_id}
+                                type="button"
+                                onClick={() => setSelectedVideo({ aweme_id: item.aweme_id, description: item.description, is_mine: false, sentence_id: sid })}
+                                className="w-[168px] shrink-0 text-left"
+                              >
+                                <span className="relative block aspect-[16/10] overflow-hidden rounded-[8px] border border-line bg-subtle">
+                                  <img
+                                    src={withToken(`/api/works/${item.aweme_id}/cover`)}
+                                    alt=""
+                                    loading="lazy"
+                                    className="h-full w-full object-cover"
+                                    onError={(event) => { event.currentTarget.style.opacity = '0'; }}
+                                  />
+                                  {item.rank === 0 ? (
+                                    <span className="absolute left-1.5 top-1.5 rounded-[4px] bg-black/60 px-1.5 py-0.5 text-[9.5px] text-white">代表视频</span>
+                                  ) : null}
+                                </span>
+                                <strong className="mt-1.5 line-clamp-2 text-[11px] font-medium leading-relaxed text-text">
+                                  {item.description || item.aweme_id}
+                                </strong>
+                                <span className="mt-1 block text-[10px] text-muted">
+                                  点赞 {number(item.digg_count)} · 播放 {number(item.play_count)}
+                                </span>
+                              </button>
+                            ))}
+                          </div>
+                          <div className="mt-2 flex items-center justify-between text-[10px] text-muted">
+                            <span>{feed.items.length} 条视频{feed.fetched_at ? ` · ${feed.fetched_at.slice(5, 16).replace('T', ' ')}` : ''}</span>
+                            <button type="button" onClick={() => loadVideos(sid)} className="transition-colors hover:text-text">刷新</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  ) : null}
+                </li>
+              );
+            })}
           </ol>
         )}
 
@@ -711,6 +949,22 @@ export function Hot({ job, busy, startJob, onAsk, notify }) {
           </p>
         ) : null}
       </div>
+
+      <AnimatePresence>
+        {selectedVideo ? (
+          <WorkDrawer
+            key={selectedVideo.aweme_id}
+            row={selectedVideo}
+            busy={busy}
+            notify={notify}
+            onClose={() => setSelectedVideo(null)}
+            onEditMetrics={() => {}}
+            onCollectComments={() => {}}
+            onSendToTeam={() => sendToTeam(selectedVideo.sentence_id, selectedVideo.aweme_id)}
+            sendingToTeam={sending === selectedVideo.aweme_id}
+          />
+        ) : null}
+      </AnimatePresence>
     </div>
   );
 }

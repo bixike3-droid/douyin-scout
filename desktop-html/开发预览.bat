@@ -7,7 +7,7 @@ set "PY=%ROOT%\.venv\Scripts\python.exe"
 set "TMPCMD=%TEMP%\yuanjing-preview-%RANDOM%.cmd"
 
 if not exist "%PY%" (
-  echo [x] .venv not found. Run desktop\启动.bat first.
+  echo [x] .venv not found. Run: pwsh -File scripts\setup.ps1
   pause
   exit /b 1
 )
@@ -20,7 +20,7 @@ del /q "%ROOT%\tmp\ready.json" >nul 2>&1
 
 echo [1/4] starting api on %APIPORT% ...
 set "PYTHONPATH=%ROOT%\src"
-start "yuanjing-api" /min "%PY%" "%~dp0app.py" --serve-only --port %APIPORT% --ready-file "%ROOT%\tmp\ready.json" --data-dir "%ROOT%\tmp\webtest"
+start "yuanjing-api" /min "%PY%" "%~dp0windows.py" --serve-only --port %APIPORT% --ready-file "%ROOT%\tmp\ready.json" --data-dir "%ROOT%\tmp\webtest"
 
 set /a n=0
 :wait_api

@@ -65,17 +65,6 @@ def test_hot_snapshot_service_returns_none_without_history(ctx):
     assert DesktopService(ctx.paths).hot_snapshot() is None
 
 
-def test_snapshot_age_gate_avoids_duplicate_refresh():
-    """启动时快照够新就不联网刷新（避免列表先显示旧快照再变一次）。"""
-    from datetime import datetime, timedelta, timezone
-    from scout.desktop.window import snapshot_age_minutes
-    fresh = (datetime.now(timezone.utc) - timedelta(minutes=2)).isoformat()
-    stale = (datetime.now(timezone.utc) - timedelta(hours=3)).isoformat()
-    assert snapshot_age_minutes(fresh) < 10
-    assert snapshot_age_minutes(stale) > 60
-    assert snapshot_age_minutes("not-a-time") is None
-
-
 def test_hot_tool_falls_back_to_snapshot(ctx, monkeypatch):
     HotTopics(ctx.db).save_snapshot([{"word": "乡村振兴", "hot_value": 100}], tier="b",
                                     fetched_at="2026-10-17T09:00:00+00:00")

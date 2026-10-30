@@ -1,4 +1,4 @@
-"""Thread-safe, per-operation steering channel from Qt to the active event loop."""
+"""Thread-safe, per-operation steering channel from the UI to the active event loop."""
 import asyncio
 import threading
 

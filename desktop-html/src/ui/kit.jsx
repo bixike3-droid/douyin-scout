@@ -15,7 +15,7 @@ const BUTTON_BASE =
   'transition-[background-color,color,box-shadow,filter] duration-150 disabled:pointer-events-none disabled:opacity-45 ' + FOCUS;
 
 const BUTTON_VARIANT = {
-  primary: 'bg-accent text-white shadow-[0_1px_2px_rgba(16,18,22,0.12)] hover:brightness-105 active:brightness-95',
+  primary: 'bg-[var(--accent-solid)] text-[color:var(--accent-contrast)] shadow-[0_1px_2px_rgba(16,18,22,0.12)] hover:brightness-105 active:brightness-95',
   secondary: 'border border-line bg-bg text-text hover:bg-subtle',
   ghost: 'text-secondary hover:bg-subtle hover:text-text',
   danger: 'bg-danger/10 text-danger hover:bg-danger/15',
@@ -45,7 +45,7 @@ export const Button = forwardRef(function Button(
 /* ----------------------------------------------------------------- Forms */
 
 const CONTROL =
-  'w-full min-w-0 rounded-[8px] border border-line bg-bg px-3 py-2.5 text-[12px] text-text outline-none ' +
+  'w-full min-w-0 rounded-[8px] border border-line bg-[var(--field)] px-3 py-2.5 text-[12px] text-text outline-none ' +
   'transition-colors duration-150 placeholder:text-muted hover:border-line focus:border-accent/60 ' +
   'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-accent/25 disabled:opacity-50';
 
@@ -248,7 +248,7 @@ export function Select({
               animate={{ opacity: 1, scale: 1, y: 0 }}
               exit={reduce ? { opacity: 0 } : { opacity: 0, scale: 0.98, y: -4 }}
               transition={{ duration: 0.12, ease: [0.16, 1, 0.3, 1] }}
-              className="fixed z-50 m-0 list-none overflow-y-auto rounded-[10px] border border-line bg-bg p-1 shadow-2 outline-none"
+              className="fixed z-[120] m-0 list-none overflow-y-auto rounded-[10px] border border-line bg-bg p-1 shadow-2 outline-none"
             >
               {items.map((item, index) => (
                 <li key={item.value} role="option" aria-selected={index === selectedIndex} data-index={index}>
@@ -320,7 +320,7 @@ export function Checkbox({ checked, onChange, children, className }) {
       <span
         className={cn(
           'grid h-4 w-4 place-items-center rounded-[4px] border transition-colors',
-          checked ? 'border-accent bg-accent text-white' : 'border-line bg-bg',
+          checked ? 'border-accent bg-accent text-[color:var(--accent-contrast)]' : 'border-line bg-bg',
         )}
       >
         {checked ? (
