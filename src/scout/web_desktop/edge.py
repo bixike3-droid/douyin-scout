@@ -53,21 +53,44 @@ class DesktopBridge:
             window.minimize()
         elif action == "maximize":
             window.restore() if window.native.WindowState.ToString() == "Maximized" else window.maximize()
-        elif action == "drag":
-            hwnd = int(window.native.Handle.ToInt64())
+        elif action == "drag" or action.startswith("resize:"):
+            # 必须在 WinForms 的 UI 线程上发起：WebView2 子控件持有鼠标捕获，
+            # 从桥接线程调用 ReleaseCapture 释放不了，窗口就不会跟着动。
+            # 同时，鼠标落在子控件上时 WM_NCHITTEST 不会交给顶层窗体，
+            # 所以移动/拉伸都由前端边条触发，这里统一转成 WM_NCLBUTTONDOWN。
+            from System import Action
             user = ctypes.windll.user32
-            user.ReleaseCapture()
-            user.PostMessageW(ctypes.c_void_p(hwnd), 0x00A1, 2, 0)
+            hwnd = int(window.native.Handle.ToInt64())
+            root = user.GetAncestor(hwnd, 2) or hwnd  # GA_ROOT
+            hits = {"left": 10, "right": 11, "top": 12, "topleft": 13,
+                    "topright": 14, "bottom": 15, "bottomleft": 16, "bottomright": 17}
+            if action == "drag":
+                code = 2  # HTCAPTION
+            else:
+                code = hits.get(action.split(":", 1)[1])
+                if code is None:
+                    raise ValueError(f"未知的缩放方向：{action}")
+
+            def start_move():
+                if action != "drag" and window.native.WindowState.ToString() == "Maximized":
+                    return
+                user.ReleaseCapture()
+                posted = user.PostMessageW(ctypes.c_void_p(root), 0x00A1, code, 0)
+                logging.info("%s root=%s posted=%s", action, root, bool(posted))
+
+            window.native.Invoke(Action(start_move))
 
 
-def trusted_navigation(url, origin):
+def trusted_navigation(url, *origins):
     value = urlsplit(url)
-    return url == "about:blank" or (value.scheme == "http" and value.netloc == urlsplit(origin).netloc)
+    return url == "about:blank" or (value.scheme == "http" and any(value.netloc == urlsplit(o).netloc for o in origins))
 
 
 def main(default_root=None):
     parser = argparse.ArgumentParser(description="源镜桌面版")
     parser.add_argument("--data-dir", type=Path)
+    parser.add_argument("--port", type=int, default=0, help="本地服务固定端口（0 = 随机）")
+    parser.add_argument("--frontend", help="开发模式：窗口直接加载该地址（如 http://127.0.0.1:5173/），适合 Vite 热更新")
     parser.add_argument("--attach", nargs="*", type=Path, default=[])
     parser.add_argument("--serve-only", action="store_true")
     parser.add_argument("--ready-file", type=Path)
@@ -75,6 +98,8 @@ def main(default_root=None):
     parser.add_argument("--debug-port", type=int, help=argparse.SUPPRESS)
     parser.add_argument("--self-check", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.frontend and urlsplit(args.frontend).hostname not in ("127.0.0.1", "localhost"):
+        parser.error("--frontend 只能指向本机回环地址")
     from ..desktop.runtime import prepare_runtime
     from .gateway import Gateway
     from .api import create_app
@@ -87,9 +112,11 @@ def main(default_root=None):
         return check(paths, args.self_check)
     gateway = Gateway(paths)
     gateway.native = not args.serve_only
-    server = Server(create_app(paths, gateway=gateway))
+    server = Server(create_app(paths, gateway=gateway), port=args.port)
     server.start()
     origin = f"http://127.0.0.1:{server.port}"
+    # 开发模式下页面来自 Vite，/api 由 Vite 代理回本地服务；两个源都允许导航
+    frontend = (args.frontend or origin).rstrip("/")
     if args.ready_file:
         args.ready_file.parent.mkdir(parents=True, exist_ok=True)
         args.ready_file.write_text(json.dumps({"port": server.port, "token": gateway.token, "pid": os.getpid()}), encoding="utf-8")
@@ -115,7 +142,7 @@ def main(default_root=None):
     except (OSError, ValueError):
         geometry = {}
     window = webview.create_window(
-        "源镜", f"{origin}/#token={gateway.token}&native=webview2", js_api=bridge,
+        "源镜", f"{frontend}/#token={gateway.token}&native=webview2", js_api=bridge,
         width=max(1040, min(geometry.get("width", 1440), 2400)),
         height=max(680, min(geometry.get("height", 960), 1800)), min_size=(1040, 680),
         frameless=True, easy_drag=False, shadow=True, background_color="#f7f7f5",
@@ -179,7 +206,7 @@ def main(default_root=None):
             window._chrome = NativeChrome(window)
             def navigation(sender, event):
                 target = str(event.Uri)
-                if not trusted_navigation(target, origin):
+                if not trusted_navigation(target, origin, frontend):
                     event.Cancel = True
                     if urlsplit(target).scheme in ("https", "http"):
                         webbrowser.open(target)

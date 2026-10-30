@@ -11,7 +11,7 @@ from PIL import Image
 
 from scout.web_desktop.api import create_app
 from scout.web_desktop.gateway import Gateway
-from scout.web_desktop.window import Server
+from scout.web_desktop.server import Server
 from scout.store.conversation import Conversations
 from scout.store.attachments import Attachments
 from scout.attachments import import_file

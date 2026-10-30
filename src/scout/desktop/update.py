@@ -17,6 +17,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Callable
 from urllib.error import URLError
 from urllib.request import Request, urlopen
 
@@ -121,22 +122,30 @@ def fetch_latest(timeout: float = 6.0) -> dict | None:
     return None
 
 
-def download(url: str, dest: Path, timeout: float = 60.0, sha256: str = "") -> bool:
+def download(url: str, dest: Path, timeout: float = 60.0, sha256: str = "",
+             progress: Callable[[int, int], None] | None = None) -> bool:
+    """下载到 dest，可选边下边回调 (已收字节, 总字节)。返回是否成功且校验通过。"""
     if not url:
         return False
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.with_suffix(dest.suffix + ".part")
     try:
         with urlopen(Request(url, headers=_HEADERS), timeout=timeout) as response:
-            total = 0
+            expected = int(response.headers.get("Content-Length") or 0)
+            received = 0
             with part.open("wb") as handle:
                 while True:
                     chunk = response.read(262144)
                     if not chunk:
                         break
                     handle.write(chunk)
-                    total += len(chunk)
-        if total < 1024:
+                    received += len(chunk)
+                    if progress:
+                        try:
+                            progress(received, expected)
+                        except Exception:  # noqa: BLE001 —— 进度回调绝不能打断下载
+                            pass
+        if received < 1024:
             part.unlink(missing_ok=True)
             return False
         if sha256:

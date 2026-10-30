@@ -5,6 +5,7 @@ import {
   ArrowUpRight, Check, ChevronDown, ChevronRight, CircleAlert, Copy, Download, FileArchive,
   FileText, Film, Image as ImageIcon, Loader2, Play, Search, X, ZoomIn, ZoomOut,
 } from 'lucide-react';
+import { motion, useReducedMotion } from 'motion/react';
 import { api, fileUrl, size, uploadUrl } from '../api.js';
 import { Badge, Button, EmptyState, Segmented, cn } from './kit.jsx';
 
@@ -25,22 +26,40 @@ export function IconButton({ icon: Icon, label, className, ...rest }) {
 }
 
 export function Modal({ title, subtitle, children, onClose, className, actions }) {
+  const reduce = useReducedMotion();
   useEffect(() => {
     const listener = (event) => { if (event.key === 'Escape') onClose(); };
     document.addEventListener('keydown', listener);
     return () => document.removeEventListener('keydown', listener);
   }, [onClose]);
 
+  const backdrop = reduce
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0 } }
+    : {
+        initial: { opacity: 0 },
+        animate: { opacity: 1, transition: { duration: 0.18, ease: 'easeOut' } },
+        exit: { opacity: 0, transition: { duration: 0.14, ease: 'easeIn' } },
+      };
+  const panel = reduce
+    ? { initial: { opacity: 0 }, animate: { opacity: 1 }, exit: { opacity: 0 }, transition: { duration: 0 } }
+    : {
+        initial: { opacity: 0, scale: 0.965, y: 14 },
+        animate: { opacity: 1, scale: 1, y: 0, transition: { duration: 0.26, ease: [0.16, 1, 0.3, 1] } },
+        exit: { opacity: 0, scale: 0.985, y: 6, transition: { duration: 0.14, ease: [0.4, 0, 1, 1] } },
+      };
+
   return (
-    <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-[#11182755] p-6 backdrop-blur-[3px]"
+    <motion.div
+      className="fixed inset-x-0 bottom-0 top-[44px] z-[100] flex items-center justify-center bg-[var(--overlay)] p-6 backdrop-blur-[3px]"
       onMouseDown={(event) => event.target === event.currentTarget && onClose()}
+      {...backdrop}
     >
-      <section
+      <motion.section
         role="dialog"
         aria-modal="true"
         aria-label={title}
         className={cn('flex max-h-[calc(100dvh-80px)] w-[min(600px,100%)] flex-col overflow-hidden rounded-[16px] border border-line bg-bg shadow-[0_30px_90px_rgb(10_14_24/0.28)]', className)}
+        {...panel}
       >
         <header className="flex shrink-0 items-center justify-between gap-4 border-b border-line px-5 py-4">
           <div className="min-w-0">
@@ -53,8 +72,8 @@ export function Modal({ title, subtitle, children, onClose, className, actions }
           </div>
         </header>
         {children}
-      </section>
-    </div>
+      </motion.section>
+    </motion.div>
   );
 }
 
@@ -83,9 +102,10 @@ export function FileTile({ item, onOpen, onRemove, compact = false }) {
     : item.status === 'error' ? '添加失败' : `${ext} · ${size(item.size || 0)}`;
 
   return (
-    <div className={cn('group relative shrink-0 self-start', compact ? 'w-[168px]' : 'w-[220px]')}>
+    <div data-testid="file-tile" className={cn('group relative shrink-0 self-start', compact ? 'w-[168px]' : 'w-[220px]')}>
       <button
         type="button"
+        data-testid="file-main"
         title={name}
         onClick={() => onOpen?.({ ...item, kind })}
         className={cn(
@@ -202,6 +222,7 @@ export function FilePreview({ item, onClose, onGallery }) {
       <div className={cn(stage, (item.kind === 'image' || item.kind === 'video') && 'bg-[color-mix(in_srgb,var(--sidebar)_70%,var(--bg))]')}>
         {item.kind === 'image' ? (
           <img
+            data-testid="preview-image"
             className="shrink-0 object-contain shadow-[0_6px_24px_rgb(0_0_0/0.08)]"
             src={src}
             alt={name}
@@ -249,7 +270,7 @@ export function FilePreview({ item, onClose, onGallery }) {
             title={`${(item.name || '').split('.').pop()?.toUpperCase() || ''} 文件`}
             desc="文件已保留，可以交给源镜继续读取和分析。"
             action={!item.upload ? (
-              <a href={fileUrl(item.id, { download: true })} download className="inline-flex items-center gap-2 rounded-[9px] bg-accent px-4 py-2 text-[12.5px] text-white">
+              <a href={fileUrl(item.id, { download: true })} download className="inline-flex items-center gap-2 rounded-[9px] bg-[var(--accent-solid)] px-4 py-2 text-[12.5px] text-[color:var(--accent-contrast)]">
                 <Download size={15} /> 保存文件
               </a>
             ) : null}
@@ -352,6 +373,7 @@ export function Gallery({ item, onClose, job, startJob, onOpen, onAnalyze }) {
               <button
                 key={asset.asset_id}
                 type="button"
+                data-testid="asset-card"
                 onClick={() => onOpen({ ...asset, id: item.id, asset_id: asset.asset_id, kind: asset.kind })}
                 className="group min-w-0 text-left"
               >

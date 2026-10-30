@@ -1,5 +1,6 @@
 import React from 'react';
 import { Minus, Square, X } from 'lucide-react';
+import markUrl from '../brand/mark.png';
 
 /**
  * 自绘标题栏：品牌 + 当前项目 + 窗口按钮。
@@ -18,19 +19,19 @@ export default function TitleBar({ project, native }) {
 
   return (
     <header
-      className="col-span-full flex h-[44px] select-none items-center gap-3 border-b border-line bg-[color-mix(in_srgb,var(--sidebar)_88%,var(--bg))] pl-[18px]"
+      className="col-span-full flex h-[44px] select-none items-center gap-3 border-b border-line bg-[var(--canvas)] pl-[18px]"
       onMouseDown={onMouseDown}
       onDoubleClick={onDoubleClick}
     >
       <div className="flex items-center gap-2.5 whitespace-nowrap">
-        <img src="/brand.png" alt="" className="h-5 w-5 rounded-[5px]" />
+        <img src={markUrl} alt="" className="h-[21px] w-[21px] object-contain" />
         <span className="text-[13px] font-[550] tracking-[0.5px] text-text">源镜</span>
         <span className="border-l border-line pl-3 text-[11px] tracking-[0.4px] text-muted">
           工作空间{import.meta.env.DEV ? ' · dev' : ''}
         </span>
       </div>
 
-      <span className="pointer-events-none mx-auto rounded-full border border-line bg-[color-mix(in_srgb,var(--bg)_55%,transparent)] px-2.5 py-[3px] text-[11px] tracking-[0.3px] text-muted">
+      <span className="pointer-events-none mx-auto rounded-full border border-line bg-[var(--subtle)] px-2.5 py-[3px] text-[11px] tracking-[0.3px] text-muted">
         {project || '本地工作空间'}
       </span>
 

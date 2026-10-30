@@ -34,17 +34,28 @@
 @layer base {
   :root {
     color-scheme: light;
+    --canvas: #fff;
     --bg: #fff;
     --sidebar: #f4f5f7;
     --subtle: #f7f8fa;
     --hover: #e9ebef;
+    --active: #fff;
+    --field: #fff;
     --line: #e7e9ee;
     --text: #24262b;
     --muted: #7c828e;
     --secondary: #565d6a;
     --accent: #3567df;
+    --accent-solid: #3567df;
     --accent-soft: #edf2ff;
+    --accent-contrast: #ffffff;
     --danger: #bd454a;
+    --overlay: rgb(17 24 39 / 0.33);
+    /* 图表色：用验证脚本检查过亮度带、色度与对比度 */
+    --chart-1: #3567df;
+    --chart-2: #b45309;
+    --chart-grid: #e7e9ee;
+    --chart-wash: rgb(53 103 223 / 0.10);
     font-family: var(--font-sans);
     color: var(--text);
     background: var(--bg);
@@ -55,19 +66,35 @@
 
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #1d1f23;
-    --sidebar: #181a1e;
-    --subtle: #24262b;
-    --hover: #2c2f35;
-    --line: #30333a;
-    --text: #e9eaf0;
-    --muted: #9198a6;
-    --secondary: #c2c7d2;
-    --accent: #8aa9ff;
-    --accent-soft: #27324c;
-    --danger: #eb9397;
-    background: #181a1e;
+    /* 取自 Claude 桌面端截图：近黑画布、稍亮面板、中性灰文字、蓝色强调 */
+    --canvas: #151515;
+    --bg: #1a1a1a;
+    --sidebar: #111111;
+    --subtle: #202020;
+    --hover: #262626;
+    --active: #232323;
+    --field: #212121;
+    --line: #2e2e2e;
+    --text: #d9d9d9;
+    --muted: #8a8a86;
+    --secondary: #a6a6a2;
+    --accent: #3787e7;
+    --accent-solid: #2f6fd0;
+    --accent-soft: #142033;
+    --accent-contrast: #ffffff;
+    --danger: #e06c75;
+    --overlay: rgb(10 10 10 / 0.6);
+    /* 图表色跑过校验：蓝 + 暖橙，亮度带、色度、色盲分离、对比度均通过 */
+    --chart-1: #3787e7;
+    --chart-2: #c96442;
+    --chart-grid: #2c2c2c;
+    --chart-wash: rgb(55 135 231 / 0.16);
+    background: #151515;
   }
+
+  .brand-lockup-dark { display: none; }
+  :root[data-theme="dark"] .brand-lockup-light { display: none; }
+  :root[data-theme="dark"] .brand-lockup-dark { display: block; }
 
   *,
   *::before,

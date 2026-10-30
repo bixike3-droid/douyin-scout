@@ -17,6 +17,11 @@ export function fileUrl(id, options = {}) {
   const query = new URLSearchParams({ token, ...options });
   return `/api/files/${encodeURIComponent(id)}?${query}`;
 }
+// 媒体元素（<video>/<img>）不能带请求头，token 只能走查询参数。
+export function withToken(path) {
+  if (!path) return '';
+  return `${path}${path.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+}
 export function uploadUrl(id, preview = true) {
   return `/api/uploads/${id}/${preview ? 'preview' : 'file'}?token=${encodeURIComponent(token)}`;
 }
@@ -37,29 +42,21 @@ export function uploadFile(file, progress) {
   });
 }
 export async function nativeBridge() {
-  // Both desktop carriers use the same UI contract. Qt remains available for
-  // the original desktop; the release carrier uses the system WebView2 runtime.
-  if (new URLSearchParams(location.hash.slice(1)).get('native') === 'webview2' || window.pywebview?.api) {
-    if (!window.pywebview?.api) await new Promise(resolve => window.addEventListener('pywebviewready', resolve, { once: true }));
-    const host = window.pywebview.api;
-    const signal = name => ({ connect(callback) { window.addEventListener(name, event => callback(event.detail)); } });
-    return {
-      handlesNativeDrop: true,
-      filesDropped: signal('yuanjing-files-dropped'),
-      dragState: signal('yuanjing-drag-state'),
-      initialFiles: callback => host.initialFiles(token).then(callback),
-      pickFiles: callback => host.pickFiles(token).then(callback),
-      windowAction: action => host.windowAction(token, action),
-      openDataFolder: () => host.openDataFolder(token),
-    };
-  }
-  if (!window.qt?.webChannelTransport) return null;
-  await new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = '/bridge.js'; script.onload = resolve; script.onerror = reject;
-    document.head.appendChild(script);
-  });
-  return new Promise(resolve => new window.QWebChannel(window.qt.webChannelTransport, channel => resolve(channel.objects.desktop)));
+  // The desktop carrier is the system WebView2 runtime (pywebview); a plain
+  // browser tab (dev preview) has no bridge.
+  if (new URLSearchParams(location.hash.slice(1)).get('native') !== 'webview2' && !window.pywebview?.api) return null;
+  if (!window.pywebview?.api) await new Promise(resolve => window.addEventListener('pywebviewready', resolve, { once: true }));
+  const host = window.pywebview.api;
+  const signal = name => ({ connect(callback) { window.addEventListener(name, event => callback(event.detail)); } });
+  return {
+    handlesNativeDrop: true,
+    filesDropped: signal('yuanjing-files-dropped'),
+    dragState: signal('yuanjing-drag-state'),
+    initialFiles: callback => host.initialFiles(token).then(callback),
+    pickFiles: callback => host.pickFiles(token).then(callback),
+    windowAction: action => host.windowAction(token, action),
+    openDataFolder: () => host.openDataFolder(token),
+  };
 }
 export const size = bytes => bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : bytes >= 1024 ** 2 ? `${(bytes / 1024 ** 2).toFixed(1)} MB` : `${Math.max(1, Math.ceil(bytes / 1024))} KB`;
 export const modelName = value => value === 'deepseek-flash' ? 'DeepSeek Flash' : value === 'deepseek-v4-pro' ? 'DeepSeek V4 Pro' : value || 'DeepSeek';

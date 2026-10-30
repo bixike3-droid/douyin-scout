@@ -1,7 +1,7 @@
 """用户确认通道：需要确认的工具调用在这里挂起，等界面里的用户做出决定。
 
 线程模型：对话循环跑在工作线程的 asyncio 事件循环里（await 等待），
-Qt 主线程通过 resolve() 传入用户的选择（call_soon_threadsafe 回送结果）。
+界面（本地 API 请求）通过 resolve() 传入用户的选择（call_soon_threadsafe 回送结果）。
 超时视为拒绝——安全默认。
 """
 from __future__ import annotations
@@ -48,7 +48,7 @@ class ConfirmationBroker:
                 self._waiters.pop(request_id, None)
 
     def resolve(self, request_id: str, approved: bool) -> bool:
-        """任意线程可调用（Qt 主线程点击按钮）；存在等待者返回 True。"""
+        """任意线程可调用（界面点击按钮后经本地 API 到达）；存在等待者返回 True。"""
         with self._lock:
             item = self._waiters.get(request_id)
         if item is None:

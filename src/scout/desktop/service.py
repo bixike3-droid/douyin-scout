@@ -146,7 +146,8 @@ class DesktopService:
         if not latest or not latest["items"]:
             return None
         topics = [{"word": item["word"], "heat": item.get("hot_value") or "",
-                   "mark": "", "why": ""} for item in latest["items"]]
+                   "mark": "", "why": "", "sentence_id": item.get("sentence_id") or ""}
+                  for item in latest["items"]]
         stamp = latest["fetched_at"][:16].replace("T", " ")
         return {"topics": topics, "usable": 0, "fetched_at": latest["fetched_at"],
                 "note": f"本地快照 {stamp}，正在后台刷新"}

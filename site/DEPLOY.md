@@ -13,7 +13,7 @@
   app.js
   assets/
   download/
-    yuanjing-latest.zip     # 打包产物（desktop/打包.bat 生成的 zip 改名即可）
+    yuanjing-latest.zip     # 打包产物（scripts/build_windows_release.py 生成的 zip 改名即可）
 ```
 
 页面里下载按钮的地址是 `https://douyin.baodaoxiaoyuan.cn/download/yuanjing-latest.zip`。
@@ -23,13 +23,30 @@
 ## 二、上传
 
 ```powershell
-# 本地打包（产物在 dist/）
-desktop\打包.bat
+# 本地打包（产物在 dist/windows/）
+.venv\Scripts\python.exe scripts\build_windows_release.py
 
 # 上传（示例：scp，换成你自己的账号/路径）
 scp -r site\* user@服务器:/var/www/douyin/
-scp dist\源镜-*.zip user@服务器:/var/www/douyin/download/yuanjing-latest.zip
+scp dist\windows\源镜-*.zip user@服务器:/var/www/douyin/download/yuanjing-latest.zip
 ```
+
+## 二·五、版本更新源（应用内更新）
+
+客户端会先请求 `http://douyin.baodaoxiaoyuan.cn/update/version.json`（失败再试 https，最后回退 GitHub Releases）。
+发版时生成并上传：
+
+```powershell
+.venv\Scripts\python.exe scripts\bump_version.py <版本>
+.venv\Scripts\python.exe -m pytest -q
+.venv\Scripts\python.exe scripts\build_windows_release.py
+.venv\Scripts\python.exe scripts\publish_update.py dist\windows\源镜-<版本>-Windows-x64.zip --version <版本> --notes 更新说明.md
+scp "dist\windows\源镜-<版本>-Windows-x64.zip" admin@服务器:/var/www/douyin/download/
+scp dist\update\version.json admin@服务器:/var/www/douyin/update/version.json
+```
+
+服务器上放固定路径 `/var/www/douyin/update/version.json`，里面的 `zip_url`、`size` 与 `sha256`
+由脚本按安装包实际内容生成；客户端下载后会再校验一次 sha256，校验不通过不会替换。
 
 ## 三、Nginx
 

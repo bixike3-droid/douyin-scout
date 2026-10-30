@@ -3,11 +3,15 @@ import {
   CircleAlert, FolderArchive, History, Loader2, MessageSquare, FileText,
   Target, Users, X, BarChart3, FolderOpen, Flame,
 } from 'lucide-react';
+import { AnimatePresence } from 'motion/react';
 import { api, authToken, nativeBridge, uploadFile, dateLabel } from '../api.js';
 import { FilePreview, Gallery } from '../ui/media.jsx';
 import { Library, DataPage, Benchmarks, Reports, Hot } from '../features/pages.jsx';
-import { SettingsPage } from '../settings.jsx';
+import { AccountPanel, PrivacyPanel, SettingsPanel } from './panels.jsx';
+import appIcon from '../brand/app-icon.png';
 import TitleBar from './TitleBar.jsx';
+import { Splash } from './Splash.jsx';
+import { WindowEdges } from './WindowEdges.jsx';
 import Sidebar from './Sidebar.jsx';
 import Workspace from '../features/workspace/Workspace.jsx';
 
@@ -22,8 +26,18 @@ const NAVIGATION = [
   ['tasks', '执行记录', History],
 ];
 
+const NATIVE_SHELL = typeof window !== 'undefined' && (
+  new URLSearchParams(window.location.hash.slice(1)).get('native') === 'webview2'
+  || !!window.pywebview?.api
+);
+
 export default function App() {
   const [boot, setBoot] = useState(null);
+  const [splash, setSplash] = useState(NATIVE_SHELL ? 'show' : 'off');
+  const [splashStage, setSplashStage] = useState('正在读取本地数据');
+  const splashAt = useRef(0);
+  const splashDone = useRef(false);
+  const splashPrimed = useRef(false);
   const [bootError, setBootError] = useState('');
   const [view, setView] = useState('workspace');
   const [conversation, setConversation] = useState(null);
@@ -40,6 +54,7 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [connection, setConnection] = useState('connecting');
   const [preview, setPreview] = useState(null);
+  const [panel, setPanel] = useState(null);
   const [gallery, setGallery] = useState(null);
   const [dragging, setDragging] = useState(false);
   const [historySearch, setHistorySearch] = useState('');
@@ -172,7 +187,7 @@ export default function App() {
     }
     if (!settings.configured) {
       notify('请先保存 DeepSeek Key');
-      setView('settings');
+      setPanel('settings');
       return;
     }
 
@@ -263,6 +278,70 @@ export default function App() {
 
   /* ------------------------------------------------------------ 启动 ---- */
 
+  function hideSplash() {
+    if (splashDone.current) return;
+    splashDone.current = true;
+    const finish = () => {
+      setSplashStage('准备就绪');
+      window.setTimeout(() => setSplash('leaving'), 160);
+      window.setTimeout(() => setSplash('off'), 470);
+    };
+    const wait = Math.max(0, 900 - (Date.now() - splashAt.current));
+    window.setTimeout(finish, wait);
+  }
+
+  async function primeHot() {
+    let snapshot = null;
+    try {
+      snapshot = await api('/hot');
+    } catch {
+      /* 没快照就继续刷新 */
+    }
+    const stamp = snapshot?.fetched_at ? new Date(snapshot.fetched_at).getTime() : 0;
+    const fresh = stamp && Date.now() - stamp < 10 * 60 * 1000;
+    if (fresh && !snapshot?.refreshing) {
+      hideSplash();
+      return;
+    }
+    setSplashStage('正在同步抖音热榜');
+    try {
+      if (!snapshot?.refreshing) await api('/hot/refresh', { method: 'POST' });
+    } catch {
+      hideSplash();
+      return;
+    }
+    while (!splashDone.current) {
+      await new Promise((resolve) => window.setTimeout(resolve, 700));
+      let latest = null;
+      try {
+        latest = await api('/hot');
+      } catch {
+        /* 继续等，最长由外层 6 秒兜底 */
+      }
+      if (latest && !latest.refreshing) {
+        hideSplash();
+        return;
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!NATIVE_SHELL) return undefined;
+    splashAt.current = Date.now();
+    const timer = window.setTimeout(hideSplash, 6000);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (!boot || !NATIVE_SHELL || splashPrimed.current) return;
+    splashPrimed.current = true;
+    if (boot.job && boot.job.state === 'running') {
+      hideSplash();
+      return;
+    }
+    primeHot();
+  }, [boot]);
+
   useEffect(() => {
     let cancelled = false;
     api('/bootstrap').then((data) => {
@@ -299,6 +378,20 @@ export default function App() {
       });
     }).catch(() => {});
   }, []);
+
+  const updateChecked = useRef(false);
+  useEffect(() => {
+    if (!boot || updateChecked.current) return;
+    if (preferences.update_auto === false) return;
+    updateChecked.current = true;
+    api('/update?check=1')
+      .then((info) => {
+        if (info?.newer && info.skipped !== info.latest?.version) {
+          notify(`发现新版本 v${info.latest.version}，可在「设置 → 本地数据」更新`);
+        }
+      })
+      .catch(() => {});
+  }, [boot, preferences.update_auto, notify]);
 
   useEffect(() => {
     const media = matchMedia('(prefers-color-scheme: dark)');
@@ -407,7 +500,7 @@ export default function App() {
   useEffect(() => {
     const handler = (event) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'n') { event.preventDefault(); loadConversation(null); }
-      if ((event.ctrlKey || event.metaKey) && event.key === ',') { event.preventDefault(); setView('settings'); }
+      if ((event.ctrlKey || event.metaKey) && event.key === ',') { event.preventDefault(); setPanel('settings'); }
       if (event.key === 'Escape') setInspector(false);
     };
     window.addEventListener('keydown', handler);
@@ -426,7 +519,7 @@ export default function App() {
 
   if (bootError) {
     return (
-      <div className="grid h-[100dvh] place-items-center bg-bg text-secondary">
+      <div className="grid h-[100dvh] place-items-center bg-[var(--canvas)] text-secondary">
         <div className="flex flex-col items-center gap-3 text-center">
           <CircleAlert size={30} className="text-danger" />
           <h2 className="text-[18px] font-medium text-text">本地工作空间暂未连接</h2>
@@ -444,10 +537,17 @@ export default function App() {
   }
 
   if (!boot) {
+    if (splash !== 'off') {
+      return (
+        <div data-testid="app-shell" className="grid h-[100dvh] bg-[var(--canvas)]">
+          <Splash stage={splashStage} leaving={splash === 'leaving'} />
+        </div>
+      );
+    }
     return (
-      <div className="grid h-[100dvh] place-items-center bg-bg">
+      <div className="grid h-[100dvh] place-items-center bg-[var(--canvas)]">
         <div className="flex flex-col items-center gap-3">
-          <img src="/brand.png" alt="" className="h-14 w-14" />
+          <img src={appIcon} alt="" className="h-14 w-14 rounded-[14px]" />
           <strong className="text-[19px] font-[550] tracking-[4px] text-text">源镜</strong>
           <span className="flex items-center gap-2 text-[12px] text-muted">
             <Loader2 size={14} className="spin" />
@@ -460,7 +560,8 @@ export default function App() {
 
   return (
     <div
-      className="grid h-[100dvh] min-w-[760px] overflow-hidden bg-bg grid-cols-[auto_minmax(0,1fr)] grid-rows-[44px_minmax(0,1fr)]"
+      data-testid="app-shell"
+      className="grid h-[100dvh] min-w-[760px] overflow-hidden bg-[var(--canvas)] grid-cols-[auto_minmax(0,1fr)] grid-rows-[44px_minmax(0,1fr)]"
       onDragOver={(event) => { if (event.dataTransfer.types.includes('Files')) { event.preventDefault(); setDragging(true); } }}
       onDragLeave={(event) => { if (!event.relatedTarget) setDragging(false); }}
       onDrop={(event) => {
@@ -485,8 +586,8 @@ export default function App() {
         onSearch={setHistorySearch}
         onOpenConversation={loadConversation}
         onNewConversation={() => loadConversation(null)}
-        onLogin={() => startJob('login')}
-        account={boot?.overview?.self?.nickname}
+        onOpenPanel={setPanel}
+        account={boot?.overview?.self || null}
         loginSaved={!!boot?.overview?.login?.saved}
         dateLabel={dateLabel}
       />
@@ -512,7 +613,7 @@ export default function App() {
             sending={sending}
             pendingSteer={pendingSteer}
             onOpenFile={openFile}
-            onOpenSettings={() => setView('settings')}
+            onOpenSettings={() => setPanel('settings')}
             onPickModel={pickModel}
             inspector={inspector}
             onToggleInspector={() => setInspector(!inspector)}
@@ -523,33 +624,23 @@ export default function App() {
             onCompact={() => startJob('chat_compact', { conversation_id: cid })}
           />
         ) : (
-          <div className="col-start-2 row-start-2 flex min-h-0 min-w-0 flex-col bg-bg">
+          <div className="col-start-2 row-start-2 flex min-h-0 min-w-0 flex-col bg-[var(--canvas)]">
             {view === 'library' ? (
               <Library openFile={openFile} openConversation={loadConversation} startJob={startJob} job={job} notify={notify} />
             ) : view === 'hot' ? (
-              <Hot job={job} busy={busy} startJob={startJob} notify={notify} onAsk={askAbout} />
+              <Hot job={job} busy={busy} startJob={startJob} notify={notify} onAsk={askAbout} onOpenConversation={loadConversation} />
             ) : ['works', 'users', 'tasks'].includes(view) ? (
               <DataPage key={view} view={view} startJob={startJob} busy={busy} notify={notify} />
             ) : view === 'benchmarks' ? (
               <Benchmarks startJob={startJob} busy={busy} notify={notify} />
             ) : view === 'reports' ? (
               <Reports startJob={startJob} busy={busy} notify={notify} />
-            ) : (
-              <SettingsPage
-                settings={settings}
-                onSettings={setSettings}
-                profile={profile}
-                onProfile={setProfile}
-                preferences={preferences}
-                onTheme={changeTheme}
-                native={native}
-                notify={notify}
-                busy={busy}
-              />
-            )}
+            ) : null}
           </div>
         )}
       </main>
+
+      {native ? <WindowEdges native={native} /> : null}
 
       <input
         className="hidden"
@@ -559,10 +650,40 @@ export default function App() {
         onChange={(event) => { addBrowserFiles(event.target.files); event.target.value = ''; }}
       />
 
+      <AnimatePresence>
+      {panel === 'account' ? (
+        <AccountPanel
+          account={boot?.overview?.self || null}
+          loginSaved={!!boot?.overview?.login?.saved}
+          onLogin={() => startJob('login')}
+          busy={busy}
+          onClose={() => setPanel(null)}
+        />
+      ) : null}
+      {panel === 'privacy' ? <PrivacyPanel onClose={() => setPanel(null)} /> : null}
+      {panel === 'settings' ? (
+        <SettingsPanel
+          settings={settings}
+          onSettings={setSettings}
+          profile={profile}
+          onProfile={setProfile}
+          preferences={preferences}
+          onTheme={changeTheme}
+          native={native}
+          notify={notify}
+          busy={busy}
+          onClose={() => setPanel(null)}
+        />
+      ) : null}
+      </AnimatePresence>
+
+      <AnimatePresence>
       {preview ? (
         <FilePreview key={`${preview.id}-${preview.asset_id || ''}`} item={preview} onClose={() => setPreview(null)} onGallery={setGallery} />
       ) : null}
+      </AnimatePresence>
 
+      <AnimatePresence>
       {gallery ? (
         <Gallery
           item={gallery}
@@ -577,6 +698,7 @@ export default function App() {
           }}
         />
       ) : null}
+      </AnimatePresence>
 
       {dragging ? (
         <div
@@ -590,6 +712,10 @@ export default function App() {
             <p className="mt-3 text-[13px] text-muted">图片、视频、文档与压缩包</p>
           </div>
         </div>
+      ) : null}
+
+      {splash !== 'off' ? (
+        <Splash stage={splashStage} leaving={splash === 'leaving'} belowTitle />
       ) : null}
 
       {toast ? (

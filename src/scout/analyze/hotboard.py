@@ -81,6 +81,7 @@ async def load_hot_board(ctx, *, client=None, fetch: Callable | None = None, lim
     for item in raw[:max(1, limit)]:
         words.append({"word": str(item.get("word") or item.get("sentence") or "").strip(),
                       "heat": item.get("hot_value") or item.get("heat") or item.get("hot_score") or "",
+                      "sentence_id": str(item.get("sentence_id") or ""),
                       "mark": "", "why": ""})
 
     notes = [snapshot_note] if snapshot_note else []

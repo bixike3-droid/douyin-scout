@@ -1,9 +1,11 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion, useReducedMotion } from 'motion/react';
 import {
-  ChevronDown, Loader2, PanelLeftClose, PanelLeftOpen, Search, Settings, SquarePen,
+  ChevronDown, FileText, Loader2, PanelLeftClose, PanelLeftOpen, Search, Settings, ShieldCheck, SquarePen,
 } from 'lucide-react';
 import { cn } from '../ui/kit.jsx';
+import { UserAvatar } from '../ui/avatar.jsx';
 
 const SPRING = { type: 'spring', stiffness: 380, damping: 34, mass: 0.85 };
 const FADE = { duration: 0.14, ease: [0.16, 1, 0.3, 1] };
@@ -42,7 +44,7 @@ function NavItem({ icon: Icon, label, active, collapsed, onClick }) {
       {active ? (
         <motion.span
           layoutId="nav-active"
-          className="absolute inset-0 rounded-[9px] bg-bg shadow-[0_1px_2px_rgb(16_18_22/0.06)]"
+          className="absolute inset-0 rounded-[9px] bg-[var(--active)] shadow-[0_1px_2px_rgb(16_18_22/0.06)]"
           transition={{ type: 'spring', stiffness: 520, damping: 42 }}
         />
       ) : null}
@@ -54,12 +56,58 @@ function NavItem({ icon: Icon, label, active, collapsed, onClick }) {
   );
 }
 
+function MenuItem({ icon: Icon, label, hint, onClick }) {
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className="flex w-full items-center gap-2.5 rounded-[8px] px-2.5 py-2 text-left text-[12px] text-secondary transition-colors hover:bg-subtle hover:text-text"
+    >
+      <Icon size={15} className="text-muted" />
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {hint ? <span className="shrink-0 text-[10px] text-muted">{hint}</span> : null}
+    </button>
+  );
+}
+
 export default function Sidebar({
   navigation, view, onNavigate, collapsed, onToggle,
   recent, activeCid, busy, runningCid, search, onSearch,
-  onOpenConversation, onNewConversation, onLogin, account, loginSaved, dateLabel,
+  onOpenConversation, onNewConversation, onOpenPanel, account, loginSaved, dateLabel,
 }) {
   const reduce = useReducedMotion();
+  const [open, setOpen] = useState(false);
+  const [anchor, setAnchor] = useState(null);
+  const accountRef = useRef(null);
+
+  function toggleMenu() {
+    const rect = accountRef.current?.getBoundingClientRect();
+    if (rect) {
+      setAnchor({
+        left: Math.max(8, Math.min(rect.left, window.innerWidth - 236)),
+        bottom: Math.max(8, window.innerHeight - rect.top + 8),
+      });
+    }
+    setOpen((value) => !value);
+  }
+
+  function choose(panel) {
+    setOpen(false);
+    onOpenPanel(panel);
+  }
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (event) => { if (event.key === 'Escape') setOpen(false); };
+    const onResize = () => setOpen(false);
+    document.addEventListener('keydown', onKey);
+    window.addEventListener('resize', onResize);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      window.removeEventListener('resize', onResize);
+    };
+  }, [open]);
   const filtered = recent.filter((item) => (item.title || '').toLowerCase().includes(search.toLowerCase()));
 
   return (
@@ -145,7 +193,7 @@ export default function Sidebar({
                   onClick={() => onOpenConversation(item.id)}
                   className={cn(
                     'flex w-full items-center gap-2 rounded-[8px] px-2 py-2 text-left text-[12px] transition-colors duration-150',
-                    active ? 'bg-bg text-text shadow-[0_1px_2px_rgb(16_18_22/0.06)]' : 'text-secondary hover:bg-[color-mix(in_srgb,var(--hover)_78%,transparent)] hover:text-text',
+                    active ? 'bg-[var(--active)] text-text shadow-[0_1px_2px_rgb(16_18_22/0.06)]' : 'text-secondary hover:bg-[color-mix(in_srgb,var(--hover)_78%,transparent)] hover:text-text',
                   )}
                 >
                   <span className="flex-1 truncate">{item.title}</span>
@@ -166,37 +214,70 @@ export default function Sidebar({
       </AnimatePresence>
 
       <div className={cn('px-3 pb-3 pt-2', collapsed && 'px-2.5')}>
-        <NavItem
-          icon={Settings}
-          label="设置"
-          active={view === 'settings'}
-          collapsed={collapsed}
-          onClick={() => onNavigate('settings')}
-        />
         <button
+          ref={accountRef}
           type="button"
-          onClick={onLogin}
-          title="登录或切换抖音账号"
+          data-testid="account-menu"
+          aria-haspopup="menu"
+          aria-expanded={open}
+          onClick={toggleMenu}
+          title="账号与设置"
           className={cn(
-            'mt-1.5 flex w-full items-center gap-2.5 rounded-[10px] px-2 py-2.5 text-left transition-colors duration-150 hover:bg-[color-mix(in_srgb,var(--hover)_70%,transparent)]',
+            'flex w-full items-center gap-2.5 rounded-[10px] px-2 py-2.5 text-left transition-colors duration-150',
+            'hover:bg-[color-mix(in_srgb,var(--hover)_70%,transparent)]',
+            open && 'bg-[color-mix(in_srgb,var(--hover)_70%,transparent)]',
             collapsed && 'justify-center px-0',
           )}
         >
-          <span className="grid h-[30px] w-[30px] shrink-0 place-items-center rounded-[10px] border border-line bg-[color-mix(in_srgb,var(--accent)_12%,var(--bg))] text-[12px] font-semibold text-accent">
-            {(account || '本')[0]}
-          </span>
+          <UserAvatar src={account?.avatar_url} name={account?.nickname} size={30} />
           <Reveal show={!collapsed} className="min-w-0 flex-1">
-            <strong className="block truncate text-[11px] font-medium text-text">{account || '本地工作空间'}</strong>
+            <strong className="block truncate text-[11px] font-medium text-text">
+              {account?.nickname || '本地工作空间'}
+            </strong>
             <small className="mt-1 flex items-center gap-1.5 text-[10px] text-muted">
               <i className={cn('h-1 w-1 rounded-full', loginSaved ? 'bg-[#659a7c]' : 'bg-muted')} />
-              {loginSaved ? '抖音登录态已保存' : '登录抖音账号'}
+              {loginSaved ? '抖音已登录' : '抖音未登录'}
             </small>
           </Reveal>
           <Reveal show={!collapsed} className="shrink-0">
-            <ChevronDown size={14} className="text-muted" />
+            <ChevronDown
+              size={14}
+              className={cn('text-muted transition-transform duration-150', open && 'rotate-180')}
+            />
           </Reveal>
         </button>
       </div>
+
+      {createPortal(
+        <AnimatePresence>
+          {open ? (
+            <>
+              <motion.div
+                initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                transition={{ duration: 0.12 }}
+                className="fixed inset-0 z-[70]"
+                onClick={() => setOpen(false)}
+              />
+              <motion.div
+                role="menu"
+                aria-label="账号与设置"
+                initial={{ opacity: 0, y: 8, scale: 0.98 }}
+                animate={{ opacity: 1, y: 0, scale: 1 }}
+                exit={{ opacity: 0, y: 8, scale: 0.98 }}
+                transition={{ duration: 0.14, ease: [0.16, 1, 0.3, 1] }}
+                style={anchor || { left: 8, bottom: 72 }}
+                className="fixed z-[71] w-[228px] overflow-hidden rounded-[12px] border border-line bg-bg p-1.5 shadow-[0_18px_48px_rgb(10_14_24/0.18)]"
+              >
+                <MenuItem icon={ShieldCheck} label="账号与安全" hint={loginSaved ? '已登录' : '未登录'}
+                          onClick={() => choose('account')} />
+                <MenuItem icon={FileText} label="隐私说明" onClick={() => choose('privacy')} />
+                <MenuItem icon={Settings} label="设置" onClick={() => choose('settings')} />
+              </motion.div>
+            </>
+          ) : null}
+        </AnimatePresence>,
+        document.body,
+      )}
     </motion.aside>
   );
 }
