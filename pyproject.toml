@@ -1,6 +1,6 @@
 [project]
 name = "douyin-scout"
-version = "0.11.1"
+version = "0.12.0"
 description = "抖音互动数据采集与分析框架（本地自用；登录态 / 匿名态分离，稳定优先）"
 requires-python = ">=3.11"
 dependencies = [
